@@ -93,6 +93,43 @@ def test_letter_accuracy_by_participant_and_block(pair_ids):
     assert acc.loc["p1", 2] == 1.0
 
 
+def test_mean_similarity_rt_by_participant(pair_ids):
+    trials = make_participant_trials("p1", "no_letters", pair_ids)
+    _meta, rows = parsing._parse_participant(trials, "no_letters")
+    df = pd.DataFrame(rows)
+    df["participant_id"] = "p1"
+    df["condition"] = "no_letters"
+    df["similarity_rt"] = [100, 200, 300]  # one value per pair_id, in row order
+
+    mean_rt = parsing.mean_similarity_rt_by_participant(df, "no_letters")
+
+    assert mean_rt["p1"] == pytest.approx(200.0)
+
+
+def test_mean_similarity_rt_by_participant_filters_by_condition(pair_ids):
+    letters_trials = make_participant_trials("p1", "letters", pair_ids)
+    no_letters_trials = make_participant_trials("p2", "no_letters", pair_ids)
+    _m1, letters_rows = parsing._parse_participant(letters_trials, "letters")
+    _m2, no_letters_rows = parsing._parse_participant(no_letters_trials, "no_letters")
+    for row in letters_rows:
+        row["participant_id"] = "p1"
+        row["condition"] = "letters"
+        row["similarity_rt"] = 1000
+    for row in no_letters_rows:
+        row["participant_id"] = "p2"
+        row["condition"] = "no_letters"
+        row["similarity_rt"] = 500
+    df = pd.DataFrame(letters_rows + no_letters_rows)
+
+    mean_rt_letters = parsing.mean_similarity_rt_by_participant(df, "letters")
+    mean_rt_no_letters = parsing.mean_similarity_rt_by_participant(df, "no_letters")
+
+    assert set(mean_rt_letters.index) == {"p1"}
+    assert set(mean_rt_no_letters.index) == {"p2"}
+    assert mean_rt_letters["p1"] == pytest.approx(1000.0)
+    assert mean_rt_no_letters["p2"] == pytest.approx(500.0)
+
+
 def test_load_all_merges_conditions_and_casts_dtype(write_result_file, pair_ids):
     letters_path = write_result_file(
         "letters.txt", "letters", [{"participant_id": "L1", "pair_ids": pair_ids}]

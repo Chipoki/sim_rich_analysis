@@ -8,7 +8,9 @@ Steps:
      data/embeddings/), compute distance/similarity vectors (cached to
      data/dist_vectors.pkl).
   4. Run the analyses from spec §4 and save one figure per analysis to
-     diagrams/.
+     diagrams/, organized into sub-directories by what the figure varies:
+     diagrams/degradation/, diagrams/desaturation/, diagrams/experimental_blocks/,
+     diagrams/individual_differences/.
 
 Progress is reported via a pinned multi-line tqdm dashboard (see progress.py):
 depth 0 tracks the 4 stages above, depth 1/2 track each stage's sub-loops.
@@ -65,6 +67,19 @@ def _run_condition(
             wide, condition, distances.get_similarity(dist_vectors, level, config.DEFAULT_LAYER), excl
         )
 
+    # (1b) Same per-participant correlation, but for every examined layer,
+    # not just the default -- needed for the cross-condition per-layer
+    # comparison figures built once both conditions have run (see run()).
+    r_by_level_per_layer = {config.DEFAULT_LAYER: r_by_level}
+    other_layers = [layer for layer in config.LAYERS if layer != config.DEFAULT_LAYER]
+    for layer in progress.bar(other_layers, desc=f"{condition}: other layers", depth=progress.STEP):
+        r_by_level_per_layer[layer] = {
+            level: analysis.per_participant_correlations(
+                wide, condition, distances.get_similarity(dist_vectors, level, layer), excl
+            )
+            for level in config.DEGRADATION_LEVELS
+        }
+
     # (2) Best layer per participant, per level
     best_layer_by_level = {}
     for level in progress.bar(config.DEGRADATION_LEVELS, desc=f"{condition}: best layer", depth=progress.STEP):
@@ -109,7 +124,7 @@ def _run_condition(
     figure_calls = [
         lambda: plotting.bar_with_dots(
             r_by_level, f"{condition} - degradation levels (layer: {default_layer_label})",
-            xlabel="Degradation level", filename=f"{condition}_degradation_levels.png",
+            xlabel="Degradation level", filename=f"degradation/{condition}_degradation_levels.png",
         ),
         lambda: plotting.bar_with_dots(
             best_r_by_level,
@@ -118,26 +133,26 @@ def _run_condition(
             dot_categories_by_level=best_layer_cat_by_level,
             category_colors=config.LAYER_COLORS,
             category_labels=config.LAYERS,
-            filename=f"{condition}_best_layer.png",
+            filename=f"degradation/{condition}_best_layer.png",
         ),
         lambda: plotting.bar_with_dots(
             avg_r_by_level, f"{condition} - degradation levels, AVG vector (layer: {default_layer_label})",
             xlabel="Degradation level", dot_label="AVG-vector value (all participants pooled)",
-            filename=f"{condition}_avg_vector.png",
+            filename=f"degradation/{condition}_avg_vector.png",
         ),
         lambda: plotting.bar_with_dots(
             r_by_desat, f"colors desaturation - {condition} (layer: {default_layer_label})",
-            xlabel="Desaturation level", filename=f"{condition}_desaturation.png",
+            xlabel="Desaturation level", filename=f"desaturation/{condition}_desaturation.png",
         ),
         lambda: plotting.bar_with_noise_ceiling(
             r_by_level, noise_ceiling_by_level,
             f"{condition} - degradation levels vs noise ceiling (layer: {default_layer_label})",
-            xlabel="Degradation level", filename=f"{condition}_degradation_vs_noise_ceiling.png",
+            xlabel="Degradation level", filename=f"degradation/{condition}_degradation_vs_noise_ceiling.png",
         ),
         lambda: plotting.bar_with_dots(
             r_by_block,
             f"{condition} - performance across experimental blocks (Full, layer: {default_layer_label})",
-            xlabel="Experimental block", filename=f"{condition}_by_block.png",
+            xlabel="Experimental block", filename=f"experimental_blocks/{condition}_by_block.png",
         ),
     ]
     if condition == "letters":
@@ -157,7 +172,7 @@ def _run_condition(
                 f"(all {len(acc_by_participant_block)} participants, incl. excluded)",
                 ylabel="Accuracy", xlabel="Experimental block",
                 reference_lines={0.5: "chance (2AFC)", config.LETTER_ACCURACY_THRESHOLD: "exclusion threshold"},
-                filename="letters_accuracy_by_block.png",
+                filename="experimental_blocks/letters_accuracy_by_block.png",
             )
         )
 
@@ -171,6 +186,7 @@ def _run_condition(
 
     results = {
         "r_by_level": r_by_level,
+        "r_by_level_per_layer": r_by_level_per_layer,
         "best_layer_by_level": best_layer_by_level,
         "avg_r_by_level": avg_r_by_level,
         "r_by_desat": r_by_desat,
@@ -181,6 +197,58 @@ def _run_condition(
     if condition == "letters":
         results["letter_accuracy_by_block"] = acc_by_participant_block
     return results
+
+
+def _run_cross_condition_figures(results: dict, df: pd.DataFrame) -> None:
+    """Figures that compare the two conditions directly, or relate a
+    per-participant behavioral quantity (RT, letter accuracy) to model
+    validity -- these need both conditions' results, so they're built after
+    _run_condition has run for each."""
+    conditions = list(results.keys())
+
+    # Letters-vs-No-Letters, across degradation levels, once per examined
+    # layer (not just the default) -- point (1) of the "per-layer" request:
+    # does the condition gap hold up under every layer, or is it specific to
+    # one representation?
+    for layer in progress.bar(config.LAYERS, desc="Cross-condition: per-layer comparisons", depth=progress.STAGE):
+        letters_by_level = {lv: results["letters"]["r_by_level_per_layer"][layer][lv] for lv in config.DEGRADATION_LEVELS}
+        no_letters_by_level = {
+            lv: results["no_letters"]["r_by_level_per_layer"][layer][lv] for lv in config.DEGRADATION_LEVELS
+        }
+        plotting.bar_with_noise_ceiling(
+            letters_by_level, no_letters_by_level,
+            f"Letters vs No-Letters across degradation levels (layer: {config.LAYERS[layer]})",
+            xlabel="Degradation level",
+            series_a_label="Letters", series_b_label="No-Letters",
+            series_a_color="steelblue", series_b_color="salmon",
+            series_a_dot_color="navy", series_b_dot_color="darkred",
+            filename=f"degradation/letters_vs_no_letters_{layer}.png",
+        )
+
+    # Individual differences: does how long someone took to judge similarity
+    # relate to how well their judgments track the model?
+    mean_rt_by_condition = {c: parsing.mean_similarity_rt_by_participant(df, c) for c in conditions}
+    r_full_by_condition = {c: results[c]["r_by_level"]["Full"] for c in conditions}
+    plotting.scatter_relationship(
+        mean_rt_by_condition, r_full_by_condition,
+        "Model validity vs mean response time (Full, layer: " + config.LAYERS[config.DEFAULT_LAYER] + ")",
+        xlabel="Mean similarity-judgment RT (ms)",
+        filename="individual_differences/r_vs_response_time.png",
+    )
+
+    # Individual differences (Letters only): does higher compliance with the
+    # concurrent letter task predict better-model-tracking similarity
+    # judgments? Uses every participant's accuracy (including excluded), but
+    # scatter_relationship's index-intersection naturally restricts the
+    # right-hand side to the included participants r_by_level already covers.
+    letter_accuracy = parsing.letter_accuracy_by_participant(df)
+    plotting.scatter_relationship(
+        {"letters": letter_accuracy}, {"letters": results["letters"]["r_by_level"]["Full"]},
+        "Model validity vs letter-discrimination accuracy (Full, layer: " + config.LAYERS[config.DEFAULT_LAYER] + ")",
+        xlabel="Letter-discrimination accuracy",
+        reference_lines={config.LETTER_ACCURACY_THRESHOLD: "exclusion threshold"},
+        filename="individual_differences/letters_r_vs_letter_accuracy.png",
+    )
 
 
 def run():
@@ -210,6 +278,7 @@ def run():
         conditions = progress.bar(["letters", "no_letters"], total=2, desc="Conditions", depth=progress.STAGE)
         for condition in conditions:
             results[condition] = _run_condition(condition, wide, dist_vectors, block_assignment, df, excluded[condition])
+        _run_cross_condition_figures(results, df)
         pbar.update(1)
 
     with open(config.DATA_DIR / "analysis_results.pkl", "wb") as f:

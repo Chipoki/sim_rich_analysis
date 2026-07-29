@@ -138,3 +138,65 @@ def test_bar_with_noise_ceiling_legend_explains_both_series(monkeypatch, patch_r
     assert "Model" in labels and "mean" in labels
     assert "Noise ceiling" in labels
     plotting.plt.close(fig)
+
+
+def test_bar_with_noise_ceiling_custom_labels_and_colors(monkeypatch, patch_result_dirs):
+    """bar_with_noise_ceiling is reused (not just for model-vs-ceiling) for
+    the Letters-vs-No-Letters comparison, so its labels/colors must be
+    overridable rather than hardcoded."""
+    _keep_figure_open(monkeypatch)
+    letters = _series_by_level()
+    no_letters = {"Full": pd.Series({"p1": 0.3, "p2": 0.2}), "Deg05": pd.Series({"p1": 0.3, "p2": 0.2})}
+
+    plotting.bar_with_noise_ceiling(
+        letters, no_letters, "title", filename=None,
+        series_a_label="Letters", series_b_label="No-Letters",
+        series_a_color="steelblue", series_b_color="salmon",
+    )
+
+    fig = plotting.plt.gcf()
+    labels = " ".join(t.get_text() for t in fig.axes[0].get_legend().get_texts())
+    assert "Letters" in labels
+    assert "No-Letters" in labels
+    assert "Model" not in labels
+    plotting.plt.close(fig)
+
+
+def test_save_and_show_creates_category_subdirectory(patch_result_dirs):
+    plotting.bar_with_dots(_series_by_level(), "title", filename="degradation/nested.png")
+
+    assert (config.DIAGRAMS_DIR / "degradation" / "nested.png").exists()
+
+
+def test_scatter_relationship_saves_file(patch_result_dirs):
+    x = {"letters": pd.Series({"p1": 100.0, "p2": 200.0, "p3": 300.0})}
+    y = {"letters": pd.Series({"p1": 0.1, "p2": 0.5, "p3": 0.9})}
+
+    plotting.scatter_relationship(x, y, "title", xlabel="RT (ms)", filename="individual_differences/rt.png")
+
+    assert (config.DIAGRAMS_DIR / "individual_differences" / "rt.png").exists()
+
+
+def test_scatter_relationship_legend_reports_r_and_n(monkeypatch, patch_result_dirs):
+    _keep_figure_open(monkeypatch)
+    x = {"letters": pd.Series({"p1": 1.0, "p2": 2.0, "p3": 3.0})}
+    y = {"letters": pd.Series({"p1": 1.0, "p2": 2.0, "p3": 3.0})}  # perfectly correlated
+
+    plotting.scatter_relationship(x, y, "title", xlabel="x", filename=None)
+
+    fig = plotting.plt.gcf()
+    labels = " ".join(t.get_text() for t in fig.axes[0].get_legend().get_texts())
+    assert "r=1.00" in labels
+    assert "N=3" in labels
+    plotting.plt.close(fig)
+
+
+def test_scatter_relationship_handles_nan_and_mismatched_index(patch_result_dirs):
+    """NaN values and participants present in only one of x/y must not crash
+    -- only fully-paired, non-NaN participants get plotted/correlated."""
+    x = {"letters": pd.Series({"p1": 1.0, "p2": float("nan"), "p3": 3.0, "p4": 4.0})}
+    y = {"letters": pd.Series({"p1": 1.0, "p2": 2.0, "p3": float("nan")})}  # p4 missing entirely
+
+    plotting.scatter_relationship(x, y, "title", xlabel="x", filename="individual_differences/nan_case.png")
+
+    assert (config.DIAGRAMS_DIR / "individual_differences" / "nan_case.png").exists()

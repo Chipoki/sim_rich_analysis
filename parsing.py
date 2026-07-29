@@ -147,3 +147,13 @@ def letter_accuracy_by_participant_and_block(df: pd.DataFrame) -> pd.DataFrame:
         .mean()
         .unstack("block_index")
     )
+
+
+def mean_similarity_rt_by_participant(df: pd.DataFrame, condition: str) -> pd.Series:
+    """
+    Per-participant mean similarity-judgment response time (ms), for one
+    condition. Unlike the letter-task fields, `similarity_rt` is recorded in
+    every trial regardless of condition, so this is available for both.
+    """
+    subset = df[df["condition"] == condition]
+    return subset.groupby("participant_id")["similarity_rt"].mean()

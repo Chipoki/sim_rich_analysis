@@ -56,19 +56,26 @@ def test_run_end_to_end_smoke(synthetic_pipeline_env):
     assert results_path.exists()
 
     for condition in ["letters", "no_letters"]:
-        for suffix in (
-            "degradation_levels", "best_layer", "avg_vector", "desaturation",
-            "degradation_vs_noise_ceiling", "by_block",
-        ):
-            assert (config.DIAGRAMS_DIR / f"{condition}_{suffix}.png").exists()
-    assert (config.DIAGRAMS_DIR / "letters_accuracy_by_block.png").exists()
+        for suffix in ("degradation_levels", "best_layer", "avg_vector", "degradation_vs_noise_ceiling"):
+            assert (config.DIAGRAMS_DIR / "degradation" / f"{condition}_{suffix}.png").exists()
+        assert (config.DIAGRAMS_DIR / "desaturation" / f"{condition}_desaturation.png").exists()
+        assert (config.DIAGRAMS_DIR / "experimental_blocks" / f"{condition}_by_block.png").exists()
+    assert (config.DIAGRAMS_DIR / "experimental_blocks" / "letters_accuracy_by_block.png").exists()
+
+    # cross-condition figures: one per examined layer (config.LAYERS is
+    # monkeypatched to a single "avgpool" entry in this fixture) plus the two
+    # individual-differences scatter plots
+    assert (config.DIAGRAMS_DIR / "degradation" / "letters_vs_no_letters_avgpool.png").exists()
+    assert (config.DIAGRAMS_DIR / "individual_differences" / "r_vs_response_time.png").exists()
+    assert (config.DIAGRAMS_DIR / "individual_differences" / "letters_r_vs_letter_accuracy.png").exists()
 
     with open(results_path, "rb") as f:
         results = pickle.load(f)
 
     assert set(results.keys()) == {"letters", "no_letters"}
     common_keys = {
-        "r_by_level", "best_layer_by_level", "avg_r_by_level", "r_by_desat", "r_by_block", "loo", "split_half",
+        "r_by_level", "r_by_level_per_layer", "best_layer_by_level", "avg_r_by_level",
+        "r_by_desat", "r_by_block", "loo", "split_half",
     }
     assert set(results["no_letters"].keys()) == common_keys
     assert set(results["letters"].keys()) == common_keys | {"letter_accuracy_by_block"}

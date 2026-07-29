@@ -1,14 +1,17 @@
 """
-Bar + per-participant-dot figures, matching the PDF's style. Every figure
-is displayed (plt.show()) and then saved to config.DIAGRAMS_DIR.
+Bar + per-participant-dot figures, matching the PDF's style, plus cross-
+participant scatter relationships (individual-differences analyses). Every
+figure is displayed (plt.show()) and then saved to config.DIAGRAMS_DIR
+(filenames may include a category sub-directory, e.g. "degradation/foo.png").
 
-Every figure always shows: a numeric value label on each bar, a reference
-line (zero by default, overridable per call), the per-level sample size
-baked directly into its x-tick label, and a legend spelling out what a bar
-vs. a dot means. The legend is always placed *below* the axes (never inside
-the plotting area), and the figure is saved with bbox_inches="tight" (see
-_save_and_show), so the saved PNG -- the artifact actually reviewed -- never
-clips the legend regardless of how many entries it has.
+Every bar figure always shows: a numeric value label on each bar, a
+reference line (zero by default, overridable per call), the per-level
+sample size baked directly into its x-tick label, and a legend spelling out
+what a bar vs. a dot means. The legend is always placed *below* the axes
+(never inside the plotting area), and the figure is saved with
+bbox_inches="tight" (see _save_and_show), so the saved PNG -- the artifact
+actually reviewed -- never clips the legend regardless of how many entries
+it has.
 """
 
 import matplotlib.pyplot as plt
@@ -16,14 +19,19 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from scipy.stats import pearsonr
 
 import config
 
 _DEFAULT_REFERENCE_LINES: dict[float, str | None] = {0.0: None}
+_DEFAULT_CONDITION_COLORS = {"letters": "steelblue", "no_letters": "salmon"}
 
 
 def _save_and_show(fig, filename: str):
+    """filename may include a category sub-directory (e.g. "degradation/foo.png");
+    that sub-directory is created on demand."""
     path = config.DIAGRAMS_DIR / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=config.FIGURE_DPI, bbox_inches="tight")
     plt.show()
     plt.close(fig)
@@ -149,8 +157,19 @@ def bar_with_noise_ceiling(
     xlabel: str = "Level",
     filename: str | None = None,
     reference_lines: dict[float, str | None] | None = None,
+    series_a_label: str = "Model",
+    series_b_label: str = "Noise ceiling",
+    series_a_color: str = "lightgray",
+    series_b_color: str = "lightblue",
+    series_a_dot_color: str = "black",
+    series_b_dot_color: str = "navy",
 ):
-    """Same as bar_with_dots, plus a faint noise-ceiling bar/dots per level."""
+    """
+    Two side-by-side bar+dot series per level. Originally written for
+    model-vs-noise-ceiling specifically (hence the default labels/colors),
+    but the shape -- two named per-level series compared side by side -- is
+    general, e.g. also reused for a Letters-vs-No-Letters comparison.
+    """
     levels = list(values_by_level.keys())
     model_means = [values_by_level[lv].mean() for lv in levels]
     ceiling_means = [noise_ceiling_by_level[lv].mean() for lv in levels]
@@ -158,8 +177,8 @@ def bar_with_noise_ceiling(
     x = np.arange(len(levels))
     width = 0.35
     fig, ax = plt.subplots(figsize=(1.9 * len(levels) + 1, 4.8))
-    model_bars = ax.bar(x - width / 2, model_means, width, color="lightgray", edgecolor="black", zorder=2)
-    ceiling_bars = ax.bar(x + width / 2, ceiling_means, width, color="lightblue", edgecolor="black", zorder=2)
+    model_bars = ax.bar(x - width / 2, model_means, width, color=series_a_color, edgecolor="black", zorder=2)
+    ceiling_bars = ax.bar(x + width / 2, ceiling_means, width, color=series_b_color, edgecolor="black", zorder=2)
     ax.bar_label(model_bars, fmt="%.2f", padding=3, fontsize=8)
     ax.bar_label(ceiling_bars, fmt="%.2f", padding=3, fontsize=8)
 
@@ -171,16 +190,16 @@ def bar_with_noise_ceiling(
         cv = noise_ceiling_by_level[lv].dropna().values
         ax.scatter(
             np.full(len(mv), i - width / 2) + rng.uniform(-0.06, 0.06, len(mv)), mv,
-            color="black", s=16, zorder=3, alpha=0.85, edgecolor="white", linewidth=0.3,
+            color=series_a_dot_color, s=16, zorder=3, alpha=0.85, edgecolor="white", linewidth=0.3,
         )
         ax.scatter(
             np.full(len(cv), i + width / 2) + rng.uniform(-0.06, 0.06, len(cv)), cv,
-            color="navy", s=16, zorder=3, alpha=0.85, edgecolor="white", linewidth=0.3,
+            color=series_b_dot_color, s=16, zorder=3, alpha=0.85, edgecolor="white", linewidth=0.3,
         )
 
     legend_handles = [
-        Patch(facecolor="lightgray", edgecolor="black", label="Model -- bar: mean, dots: participants"),
-        Patch(facecolor="lightblue", edgecolor="black", label="Noise ceiling -- bar: mean, dots: participants"),
+        Patch(facecolor=series_a_color, edgecolor="black", label=f"{series_a_label} -- bar: mean, dots: participants"),
+        Patch(facecolor=series_b_color, edgecolor="black", label=f"{series_b_label} -- bar: mean, dots: participants"),
     ]
     legend_handles.extend(_draw_reference_lines(ax, reference_lines))
 
@@ -191,6 +210,62 @@ def bar_with_noise_ceiling(
     ax.set_xticklabels(
         [_level_ticklabel(lv, len(values_by_level[lv])) for lv in levels], rotation=30, ha="right"
     )
+    _legend_below(ax, legend_handles)
+
+    if filename:
+        _save_and_show(fig, filename)
+    else:
+        plt.show()
+        plt.close(fig)
+
+
+def scatter_relationship(
+    x_by_condition: dict[str, pd.Series],
+    y_by_condition: dict[str, pd.Series],
+    title: str,
+    xlabel: str,
+    ylabel: str = "Pearson R",
+    condition_colors: dict[str, str] | None = None,
+    reference_lines: dict[float, str | None] | None = None,
+    filename: str | None = None,
+):
+    """
+    Cross-participant scatter relating two per-participant quantities (e.g.
+    response time vs model-agreement) -- an individual-differences analysis,
+    distinct from the bar-per-level figures above. One color per condition;
+    each condition's own Pearson r (and N) is computed and shown directly in
+    the legend, so the relationship's strength is never left for the reader
+    to eyeball unassisted.
+
+    x_by_condition / y_by_condition: {condition: Series}, indexed by
+    participant_id. Only participants present in *both* series (per
+    condition) are plotted/correlated.
+    """
+    condition_colors = condition_colors or _DEFAULT_CONDITION_COLORS
+
+    fig, ax = plt.subplots(figsize=(6.5, 5))
+    legend_handles = []
+    for condition, x in x_by_condition.items():
+        y = y_by_condition[condition]
+        common = x.index.intersection(y.index)
+        xv, yv = x.loc[common].dropna(), y.loc[common].dropna()
+        common = xv.index.intersection(yv.index)
+        xv, yv = xv.loc[common], yv.loc[common]
+        color = condition_colors.get(condition, "black")
+        ax.scatter(xv, yv, color=color, s=32, alpha=0.8, edgecolor="white", linewidth=0.4, zorder=3)
+
+        if len(common) >= 2 and xv.std() > 0 and yv.std() > 0:
+            r, _p = pearsonr(xv, yv)
+            label = f"{condition} (r={r:.2f}, N={len(common)})"
+        else:
+            label = f"{condition} (N={len(common)})"
+        legend_handles.append(Line2D([0], [0], marker="o", linestyle="none", color=color, label=label))
+
+    legend_handles.extend(_draw_reference_lines(ax, reference_lines))
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
     _legend_below(ax, legend_handles)
 
     if filename:
