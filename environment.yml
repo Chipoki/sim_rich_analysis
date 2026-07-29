@@ -1,0 +1,15 @@
+name: sim_rich_analysis_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pytorch-cpu
+  - torchvision
+  - pandas
+  - numpy
+  - scipy
+  - matplotlib
+  - pillow
+  - tqdm
+  - pytest
+  - pip

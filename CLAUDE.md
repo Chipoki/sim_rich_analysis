@@ -1,0 +1,203 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A CPU-only analysis pipeline that replicates the degradation-level / layer / AVG-vector / desaturation
+analyses from a peripheral-vision similarity-judgment study (`SimRich Pres 29.12.25`) on new web-experiment
+data (Letters & No-Letters conditions). It correlates human pairwise similarity ratings against CNN
+(ResNet50-Places365) embedding distances for images at various degradation levels.
+
+## Setup and running
+
+```bash
+conda env create -f environment.yml
+conda activate web-analysis
+python run.py
+```
+
+There is no linter or build step in this repo — it's a single-purpose analysis pipeline run end-to-end
+via `python run.py`. There is a `tests/` pytest suite (see below); there is no other build step.
+
+### Tests
+
+```bash
+pytest              # fast suite: synthetic fixtures only, offline, ~seconds
+pytest -m slow       # + the real end-to-end run against real src_data/weights (opt-in, slow)
+```
+
+`pytest.ini` deselects the `slow` marker by default (`addopts = -m "not slow"`), so plain `pytest` never
+triggers a real CPU ResNet50 run. `tests/test_slow_e2e.py`'s single slow test is additionally
+`skipif`-gated on `config.SRC_DATA_DIR` / `RESNET_WEIGHTS_PATH` existing, so it's a no-op wherever the
+real raw data isn't present. Every other test file mirrors a pipeline module 1:1 (`test_parsing.py`,
+`test_embeddings.py`, ...) and uses only synthetic fixtures from `tests/conftest.py` — a tiny generated
+trial-JSON factory, tiny generated images, and a `StubExtractor` that fakes `EmbeddingExtractor`'s
+model/forward pass so caching/batching logic is exercised without real torch compute.
+
+### Expected directory layout
+
+This project must sit as a **sibling** of a `src_data/` folder (raw data: result JSON files, stimulus image
+folders, `resnet50_places365.pth.tar`) and writes all outputs to a third sibling folder, `web_analysis_results/`
+(auto-created). If the raw-data folder has a different name, change `SRC_DATA_DIR` in `config.py` — that's
+the only path that should ever need editing. Full layout is documented in README.md §0.
+
+### Caching behavior
+
+First run is slow (CPU ResNet50 forward passes over ~400 images × 6 levels); embeddings are cached to
+`web_analysis_results/data/embeddings/<level>_<layer>.pkl` and every subsequent run reads from cache.
+Delete a specific `<level>_<layer>.pkl` to force recomputation of just that one. `sim_vectors.pkl`,
+`dist_vectors.pkl`, and `analysis_results.pkl` cache the other pipeline stages similarly.
+
+## Architecture
+
+The pipeline is a strict linear stage sequence, each stage consuming the previous stage's output and each
+stage's module owning its own disk cache (pickle files under `web_analysis_results/data/`). `config.py` is
+the single source of truth for every path, folder-name mapping, layer name, and exclusion constant — no
+other module hardcodes these.
+
+```
+parsing.py  →  sim_vectors.py         →  analysis.py  →  plotting.py
+              ↗
+embeddings.py → distances.py         ↗
+```
+
+- **`parsing.py`** — raw JSON (one line per participant, a JSON array of trial objects) → tidy long-format
+  DataFrame. A logical trial is 2–3 consecutive JSON objects (`psychophysics`, optional `letter_question`,
+  `similarity_question`) sharing a `pair_id`. **`trial_index` is per-phase and must never be used as a join
+  key** — `pair_id` is the only safe key, and it's stable across all 40 participants in both conditions
+  (everyone rates the same 200 pairs, just in randomized order).
+
+- **`sim_vectors.py`** — pivots the tidy DataFrame into a wide table: index = `pair_id` (sorted, canonical
+  order used by every vector downstream), columns = `(condition, participant_id)` MultiIndex, values =
+  1–6 similarity rating. This alignment-by-`pair_id` (not trial order or position) is what makes human
+  vectors comparable to each other and to model vectors.
+
+- **`embeddings.py`** — CPU image embedding extraction behind an `EmbeddingExtractor` ABC with pluggable
+  backends (`ResNetPlacesExtractor` default, `DinoV2Extractor` alternate — set via `config.BACKEND`).
+  `ResNetPlacesExtractor` exposes 3 layers per the original analysis: `avgpool` (2048-d, default),
+  `layer4` (100,352-d flattened, un-pooled), `classifier` (365-d Places365 logits) — extracted in one
+  forward pass via a forward hook on `layer4`. Handles its own batching (`config.BATCH_SIZE`) and per-
+  `(level, layer)` disk caching; the model is lazily loaded so instantiating an extractor never touches torch.
+
+- **`distances.py`** — per-image embeddings → per-pair cosine distance/similarity vectors, aligned 1:1
+  with the human vectors by `pair_id`. Cosine distance is used throughout because these layers are
+  ReLU-activated (non-negative), keeping distance in `[0, 1]` so `similarity = 1 - distance` is a valid
+  bounded similarity.
+
+- **`analysis.py`** — per-participant Pearson correlations (human vs. model vector), best-layer-per-
+  participant selection, AVG-vector (group-mean) correlation, split-half reliability (Spearman-Brown
+  corrected), leave-one-out reliability (doubles as both the headline `R_LOO` stat and the noise ceiling
+  plotted alongside model bars), and paired Wilcoxon tests between adjacent degradation levels.
+  `get_excluded_participants()` computes the Letters exclusion automatically from
+  `letter_discrimination_correct` accuracy (< `LETTER_ACCURACY_THRESHOLD`); the No-Letters exclusion is a
+  self-report **not present in the raw JSON** — set `config.NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID`
+  manually if known, else all N=20 are included.
+
+- **`plotting.py`** — bar + per-participant-dot figures (`bar_with_dots`, `bar_with_noise_ceiling`); every
+  figure is both displayed and saved to `web_analysis_results/diagrams/`.
+
+- **`run.py`** — thin end-to-end orchestration calling the above in order, for both conditions
+  (`letters`, `no_letters`), producing one figure per analysis in spec §4.
+
+- **`config.py`** — all paths, `LEVEL_FOLDERS` (degradation/desaturation level → stimulus subfolder name),
+  `LAYERS`, `DEGRADATION_LEVELS` / `DESATURATION_LEVELS` groupings, exclusion thresholds, reliability/
+  plotting constants. Read this first when tracing where a level, layer, or exclusion rule is defined.
+
+- **`progress.py`** — the tqdm bar factories every stage/sub-stage loop uses, so the run reports progress
+  as one pinned, multi-line dashboard instead of scrolling prints. Fixed nesting by `position`: depth 0 is
+  the whole run (4 stages), depth 1 a stage's primary loop, depth 2 the finer loop nested inside that.
+  `progress.write(...)` (a `tqdm.write` wrapper) is used instead of `print(...)` for any milestone message
+  emitted while bars are active, since a plain `print` would corrupt the pinned display.
+
+## Known caveats worth knowing before changing analysis logic
+
+- The "AvgPool / Layer_4 / Classifier" interpretation of the original MATLAB analysis's 3 layers is a
+  best-effort reading. Raw-data folders contain precomputed `<Layer>_embeddings.csv` under each stimulus
+  folder's `ResNet_places/` for cross-checking dimensionality if the layer definitions are ever suspect —
+  this pipeline never reads those CSVs itself, it recomputes embeddings fresh.
+- Computed reliability (`R_LOO` ≈ 0.39 Letters / 0.73 No-Letters) is in the right ballpark vs. the PDF's
+  ≈0.44 / ≈0.78 but not exact, plausibly due to the unresolved No-Letters manual exclusion and this being a
+  different (web) data collection than the original PDF.
+- A PNG variant of the tunnel condition exists on disk (`NavehVer_Tunnel_PNG`); `LEVEL_FOLDERS["Tunnel"]`
+  currently points at the white-background JPG variant instead.
+
+## AI Coding Guardrails
+1. General behavior
+   - Act as a disciplined, context-aware AI pair programmer, not an autonomous refactorer.
+   - Treat the existing codebase and documentation as the source of truth, and optimize for diffs that a human reviewer can fully understand and trust.
+
+2. Working in an existing codebase
+
+   - Surgical changes only: Edit exactly what is necessary to satisfy the current request. Do not refactor, rename, reformat, or “improve” unrelated code, comments, or structure unless explicitly asked.
+   - Reuse before adding: Prefer using existing functions, classes, modules, patterns, and conventions. Introduce new abstractions only when clearly required for a robust, maintainable solution.
+   - Respect project style: Match the current naming, error handling, logging, and architectural patterns. Avoid introducing conflicting paradigms.
+   - Docs alignment: If a README or other top-level docs exist, update them surgically whenever your changes make them incomplete or inaccurate, including clarifying previously undocumented behavior or constraints, while keeping all prose minimal and focused.
+
+3. New code and design principles
+   - Modular & simple: Follow modular and OOP-leaning design with clear separation of concerns, but avoid over-engineering. Favor simple, explicit solutions, tight interfaces, and minimal configuration surface.
+   - Minimal but meaningful comments:
+       - Comment only where logic, edge cases, or integration behavior are non-obvious.
+       - Do not narrate trivial code or restate what is already clear from names and structure.
+   - Documentation discipline: Keep README and other docs concise and task-focused. Explain what future developers need to know to safely extend, debug, or integrate, not every detail.
+
+4. Testing and correctness
+
+   - Correctness first: Always prioritize correctness, safety, and reproducibility over speed of delivery or cleverness.
+   - Test behavior, not implementation: When adding or changing behavior, write or extend tests that cover observable behavior and important edge cases, rather than internal implementation details.
+   - Always add/extend tests for new behavior:
+     - For every new feature, bug fix, or non-trivial refactor, add new tests or extend existing ones to cover the change.
+     - Prefer small, focused tests that clearly express the expected behavior and guard against regression.
+
+   - Performance-heavy and pipeline-style code
+       - Smoke tests instead of full runs by default: For performance-heavy code (e.g., long-running pipelines, large fMRI/ML jobs, full-model training loops, large ETL), prefer smoke tests and lightweight integration tests over full end-to-end runs on every change.
+       - Design smoke tests to be fast and representative:
+           - Use small, representative datasets, synthetic data, or reduced configurations that approximate real-world structure without full cost.
+           - Aim for tests that verify “does this run end-to-end without crashing, with sane outputs and resource usage?” rather than full metric-level validation.
+
+       - Bounded expectations:
+           - For stochastic or retrained models, assert that outputs fall within reasonable bounds (e.g., ranges, shapes, basic invariants) rather than exact values.
+           - Avoid tests that require full convergence, full training epochs, or production-scale throughput unless explicitly requested.
+
+       - Full end-to-end tests as special cases:
+
+           - Reserve full end-to-end runs (large datasets, full training, full pipeline execution) for explicitly labeled scenarios (e.g., release gating, performance benchmarking, or dedicated CI jobs), not for routine local changes.
+           - When proposing such tests, clearly mark them as “expensive” and, if possible, provide a cheaper smoke-test variant that can be run more frequently.
+
+5. Communication and assumptions
+    - Clarify before acting: When the request is underspecified or ambiguous, ask targeted questions instead of guessing.
+    - Expose tradeoffs: When there are meaningful tradeoffs (speed vs. memory, readability vs. abstraction, smoke vs. full end-to-end testing), briefly state them and choose the option that best matches the existing project philosophy.
+    - Diff-optimized changes: Assume your work will be reviewed as diffs. Aim for small, coherent commits with clear intent and no hidden behavior changes.
+
+6. Project legacy log
+    - Location: Maintain a persistent history of our collaboration in ./.claude/project_legacy_log.
+    - Session start behavior: At the start of each new session:
+        - Read the log to recover context.
+        - Use it to understand past decisions, known pitfalls, and existing patterns before proposing changes.
+    - Log entry structure: For each meaningful increment, append a concise entry that includes:
+        - Request: What was asked.
+        - Changes: Files, functions, interfaces, tests, and docs that were modified or added.
+        - Trials and errors: Any significant dead ends, surprising behavior, or debugging paths.
+        - Retrospective: In hindsight, the root cause of any issue plus the final solution and any reusable lessons or patterns learned.
+
+7. Log hygiene and summarization
+
+    - High-signal overview: Treat project_legacy_log as an accumulated overview of technical and conceptual evolution—not a scratchpad.
+    - Collapse solved noise: When an issue is solved after a long debugging or exploratory process, replace verbose, step-by-step notes with a short, high-value summary that a future reader can understand in under a minute.
+    - Avoid duplication: Do not repeat the same information across multiple entries; reference prior entries when needed.
+    - Keep entries skimmable: Use short paragraphs or bullets; avoid long narrative blocks.
+
+8. Session message rule
+
+    - Message counting: Count only user messages in the current conversation (exclude assistant replies).
+    - On the 6th user message:
+        - Before executing the request, update project_legacy_log with a session-level summary of the first five messages: what was covered, what changed, and outstanding questions or TODOs.
+        - After updating the log, treat the 6th message as the first prompt of a new logical session, while preserving all existing files and context.
+        - Only then proceed to execute the 6th request under the same guardrails.
+
+9. Global priorities
+
+    - Favor explicitness over guesswork.
+    - Favor tight feedback loops over broad autonomous changes.
+    - Favor fast smoke tests for frequent validation and reserve full end-to-end runs for explicit, high-value scenarios.
+    - Favor code and tests that a careful human reviewer would trust after reading only the diffs, the tests, and project_legacy_log.
