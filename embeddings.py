@@ -11,8 +11,6 @@ Two swappable backends behind one interface:
   - DinoV2Extractor: a single-layer (patch-averaged) embedding from a
     torch.hub DINOv2 backbone. Needs internet on first run to fetch
     pretrained weights.
-  - DinoV3Extractor: same idea, one layer newer (DINOv3 backbone). Needs
-    internet on first run to fetch pretrained weights.
 
 Caching: for a given (level, layer), embeddings for every image in that
 level's folder are cached to
@@ -196,47 +194,9 @@ class DinoV2Extractor(EmbeddingExtractor):
         return {"dinov2": feats.numpy()}
 
 
-class DinoV3Extractor(EmbeddingExtractor):
-    """Single-layer (patch-token-averaged) DINOv3 embedding. Needs internet
-    on first run to download pretrained weights via torch.hub. The upstream
-    repo's hubconf.py eagerly imports its full eval suite (classifiers/
-    depthers/detectors/dinotxt/segmentors), not just the plain backbone
-    called here, so loading it needs omegaconf/torchmetrics/termcolor on
-    top of torch/torchvision even though this project never touches those
-    other entrypoints -- see environment.yml."""
-
-    def _load_model(self):
-        import torch
-
-        model = torch.hub.load("facebookresearch/dinov3", config.DINOV3_MODEL_NAME)
-        model.eval()
-        return model
-
-    def _preprocess(self, image: Image.Image):
-        import torchvision.transforms as T
-
-        transform = T.Compose([
-            T.Resize(config.IMAGE_RESIZE),
-            T.CenterCrop(config.IMAGE_CROP),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-        return transform(image)
-
-    def _forward_batch(self, model, batch) -> dict[str, np.ndarray]:
-        import torch
-
-        with torch.no_grad():
-            x = torch.stack(batch, dim=0)
-            feats = model(x)  # (B, D) pooled CLS-token embedding
-        return {"dinov3": feats.numpy()}
-
-
 def get_extractor(backend: str = config.BACKEND) -> EmbeddingExtractor:
     if backend == "resnet50_places365":
         return ResNetPlacesExtractor()
     if backend == "dinov2":
         return DinoV2Extractor()
-    if backend == "dinov3":
-        return DinoV3Extractor()
     raise ValueError(f"Unknown backend: {backend}")

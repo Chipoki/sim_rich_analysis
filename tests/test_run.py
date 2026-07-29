@@ -69,24 +69,24 @@ def test_run_end_to_end_smoke(synthetic_pipeline_env):
     assert (config.DIAGRAMS_DIR / "individual_differences" / "r_vs_response_time.png").exists()
     assert (config.DIAGRAMS_DIR / "individual_differences" / "letters_r_vs_letter_accuracy.png").exists()
 
-    # config.EXTRA_BACKENDS defaults to ["dinov3"] (not monkeypatched here), so
-    # the same figure set is expected again under diagrams/dinov3/ -- except
+    # config.EXTRA_BACKENDS defaults to ["dinov2"] (not monkeypatched here), so
+    # the same figure set is expected again under diagrams/dinov2/ -- except
     # letters_accuracy_by_block, which is purely behavioral and only ever
     # generated once (from the primary backend's run, see run._run_condition).
     for condition in ["letters", "no_letters"]:
         for suffix in ("degradation_levels", "best_layer", "avg_vector", "degradation_vs_noise_ceiling"):
-            assert (config.DIAGRAMS_DIR / "dinov3" / "degradation" / f"{condition}_{suffix}.png").exists()
-        assert (config.DIAGRAMS_DIR / "dinov3" / "desaturation" / f"{condition}_desaturation.png").exists()
-        assert (config.DIAGRAMS_DIR / "dinov3" / "experimental_blocks" / f"{condition}_by_block.png").exists()
-    assert not (config.DIAGRAMS_DIR / "dinov3" / "experimental_blocks" / "letters_accuracy_by_block.png").exists()
-    assert (config.DIAGRAMS_DIR / "dinov3" / "degradation" / "letters_vs_no_letters_dinov3.png").exists()
-    assert (config.DIAGRAMS_DIR / "dinov3" / "individual_differences" / "r_vs_response_time.png").exists()
-    assert (config.DIAGRAMS_DIR / "dinov3" / "individual_differences" / "letters_r_vs_letter_accuracy.png").exists()
+            assert (config.DIAGRAMS_DIR / "dinov2" / "degradation" / f"{condition}_{suffix}.png").exists()
+        assert (config.DIAGRAMS_DIR / "dinov2" / "desaturation" / f"{condition}_desaturation.png").exists()
+        assert (config.DIAGRAMS_DIR / "dinov2" / "experimental_blocks" / f"{condition}_by_block.png").exists()
+    assert not (config.DIAGRAMS_DIR / "dinov2" / "experimental_blocks" / "letters_accuracy_by_block.png").exists()
+    assert (config.DIAGRAMS_DIR / "dinov2" / "degradation" / "letters_vs_no_letters_dinov2.png").exists()
+    assert (config.DIAGRAMS_DIR / "dinov2" / "individual_differences" / "r_vs_response_time.png").exists()
+    assert (config.DIAGRAMS_DIR / "dinov2" / "individual_differences" / "letters_r_vs_letter_accuracy.png").exists()
 
     with open(results_path, "rb") as f:
         results = pickle.load(f)
 
-    assert set(results.keys()) == {"resnet50_places365", "dinov3"}
+    assert set(results.keys()) == {"resnet50_places365", "dinov2"}
     common_keys = {
         "r_by_level", "r_by_level_per_layer", "best_layer_by_level", "avg_r_by_level",
         "r_by_desat", "r_by_block", "loo", "split_half",
@@ -98,9 +98,9 @@ def test_run_end_to_end_smoke(synthetic_pipeline_env):
 
 
 def test_run_extra_backends_disabled_produces_single_backend_results(monkeypatch, synthetic_pipeline_env):
-    """config.EXTRA_BACKENDS is opt-in-by-default (["dinov3"]); disabling it
-    must fall back to exactly the pre-DinoV3 behavior -- one backend, no
-    diagrams/dinov3/ sub-tree at all."""
+    """config.EXTRA_BACKENDS is opt-in-by-default (["dinov2"]); disabling it
+    must fall back to exactly the pre-extra-backend behavior -- one backend,
+    no diagrams/dinov2/ sub-tree at all."""
     monkeypatch.setattr(config, "EXTRA_BACKENDS", [])
 
     run.run()
@@ -108,7 +108,7 @@ def test_run_extra_backends_disabled_produces_single_backend_results(monkeypatch
     with open(config.DATA_DIR / "analysis_results.pkl", "rb") as f:
         results = pickle.load(f)
     assert set(results.keys()) == {"resnet50_places365"}
-    assert not (config.DIAGRAMS_DIR / "dinov3").exists()
+    assert not (config.DIAGRAMS_DIR / "dinov2").exists()
 
 
 def test_layers_for_backend_resnet_returns_config_layers():
@@ -116,15 +116,14 @@ def test_layers_for_backend_resnet_returns_config_layers():
 
 
 def test_layers_for_backend_single_layer_backend_keyed_by_backend_name():
-    assert run._layers_for_backend("dinov3") == {"dinov3": "DinoV3"}
     assert run._layers_for_backend("dinov2") == {"dinov2": "DinoV2"}
 
 
 def test_default_layer_for_backend():
     assert run._default_layer_for_backend("resnet50_places365") == config.DEFAULT_LAYER
-    assert run._default_layer_for_backend("dinov3") == "dinov3"
+    assert run._default_layer_for_backend("dinov2") == "dinov2"
 
 
 def test_layer_colors_for_backend():
     assert run._layer_colors_for_backend("resnet50_places365") == config.LAYER_COLORS
-    assert run._layer_colors_for_backend("dinov3") == {"dinov3": config.SINGLE_LAYER_BACKEND_COLORS["dinov3"]}
+    assert run._layer_colors_for_backend("dinov2") == {"dinov2": config.SINGLE_LAYER_BACKEND_COLORS["dinov2"]}

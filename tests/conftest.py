@@ -187,7 +187,7 @@ class StubExtractor(embeddings.EmbeddingExtractor):
     # Covers every layer key any real extractor ever requests: resnet50_places365's
     # 3 layers, plus each single-layer backend's own key (config.SINGLE_LAYER_BACKEND_LABELS) --
     # so this one stub works for extract_level() regardless of which backend is under test.
-    LAYER_DIMS = {"avgpool": 8, "layer4": 16, "classifier": 4, "dinov2": 8, "dinov3": 8}
+    LAYER_DIMS = {"avgpool": 8, "layer4": 16, "classifier": 4, "dinov2": 8}
 
     def __init__(self):
         super().__init__()

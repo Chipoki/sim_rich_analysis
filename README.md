@@ -27,12 +27,12 @@ everything to a **third**, sibling folder:
     ├── data/
     │   ├── sim_vectors.pkl
     │   ├── dist_vectors.pkl            # primary backend (config.BACKEND)
-    │   ├── dist_vectors_dinov3.pkl     # one per config.EXTRA_BACKENDS entry
+    │   ├── dist_vectors_dinov2.pkl     # one per config.EXTRA_BACKENDS entry
     │   ├── analysis_results.pkl
     │   └── embeddings/<level>_<layer>.pkl
     └── diagrams/
         ├── */*.png                    # primary backend's figures
-        └── dinov3/*/*.png             # same figure set, DinoV3 embeddings
+        └── dinov2/*/*.png             # same figure set, DinoV2 embeddings
 ```
 
 If your raw-data folder isn't literally named `src_data`, update
@@ -107,27 +107,21 @@ Each analysis figure is displayed and saved to
   has `*_pairs.csv`, no `*_embeddings.csv`) — this project never reads
   them, it recomputes embeddings fresh, so that's fine either way.
 
-  `DinoV2Extractor` and `DinoV3Extractor` are implemented behind the same
-  interface (per the original prompt's aspirational ask) but are **not**
-  the default backend; both need internet access on first run to fetch
-  weights via `torch.hub`. DinoV3's `hubconf.py` eagerly imports the
-  upstream repo's *entire* eval suite (classifiers/depthers/detectors/
-  dinotxt/segmentors), not just the plain backbone this project calls, so
-  `torch.hub.load("facebookresearch/dinov3", ...)` transitively needs
-  `omegaconf`, `torchmetrics` and `termcolor` even though none of them are
-  used by the code path this project actually exercises -- already in
-  `environment.yml`.
+  `DinoV2Extractor` is implemented behind the same interface (per the
+  original prompt's aspirational ask) but is **not** the default backend;
+  it needs internet access on first run to fetch weights via `torch.hub`
+  from the public, unauthenticated `dl.fbaipublicfiles.com` CDN.
 
-  `config.EXTRA_BACKENDS` (default `["dinov3"]`) additionally runs the
+  `config.EXTRA_BACKENDS` (default `["dinov2"]`) additionally runs the
   *entire* per-condition figure set (degradation levels, best-layer, AVG
   vector, desaturation, noise ceiling, blocks, cross-condition comparisons)
-  a second time using DinoV3 embeddings instead of ResNet-Places50's,
+  a second time using DinoV2 embeddings instead of ResNet-Places50's,
   alongside (not instead of) the primary backend's figures -- see
-  `run.py`'s module docstring. Since DinoV2/DinoV3 expose one pooled
-  embedding rather than 3 named layers, they're run through the same
-  per-layer plumbing as a size-1 "layers" dict keyed by the backend's own
-  name (`config.SINGLE_LAYER_BACKEND_LABELS` / `_COLORS`) -- the best-layer
-  figure is consequently a (harmless) best-of-1 for these backends. Set
+  `run.py`'s module docstring. Since DinoV2 exposes one pooled embedding
+  rather than 3 named layers, it's run through the same per-layer plumbing
+  as a size-1 "layers" dict keyed by the backend's own name
+  (`config.SINGLE_LAYER_BACKEND_LABELS` / `_COLORS`) -- the best-layer
+  figure is consequently a (harmless) best-of-1 for this backend. Set
   `config.EXTRA_BACKENDS = []` to disable and only run `config.BACKEND`.
 
 - **Distances** (`distances.py`): cosine distance throughout. These CNN
@@ -167,7 +161,7 @@ Each analysis figure is displayed and saved to
 | `config.py` | paths, folder maps, layer names, exclusions, all constants |
 | `parsing.py` | raw JSON → tidy long-format DataFrame |
 | `sim_vectors.py` | tidy DataFrame → per-participant human similarity vectors |
-| `embeddings.py` | CPU image embedding extraction + disk caching (ResNet-Places50 / DINOv2 / DINOv3) |
+| `embeddings.py` | CPU image embedding extraction + disk caching (ResNet-Places50 / DINOv2) |
 | `distances.py` | embeddings → per-pair cosine distance/similarity vectors |
 | `analysis.py` | correlations, best-layer selection, AVG-vector R, split-half, LOO/noise ceiling, paired stats |
 | `plotting.py` | bar + per-participant-dot figures |

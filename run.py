@@ -5,7 +5,7 @@ Steps:
   1. Parse both result files into one tidy DataFrame.
   2. Build human similarity vectors (cached to data/sim_vectors.pkl).
   3. For config.BACKEND and every backend in config.EXTRA_BACKENDS (e.g.
-     "dinov3"), extract embeddings for every stimulus level/layer needed
+     "dinov2"), extract embeddings for every stimulus level/layer needed
      (cached under data/embeddings/), compute distance/similarity vectors
      (cached to data/dist_vectors.pkl for config.BACKEND, data/dist_vectors_
      <backend>.pkl for each extra one).
@@ -314,7 +314,7 @@ def _run_cross_condition_figures(condition_results: dict, df: pd.DataFrame, back
 
 
 def run():
-    # config.BACKEND first, then any config.EXTRA_BACKENDS (e.g. "dinov3"),
+    # config.BACKEND first, then any config.EXTRA_BACKENDS (e.g. "dinov2"),
     # de-duplicated in case a backend appears in both -- each one gets the
     # exact same figure set (see _run_condition/_run_cross_condition_figures),
     # with config.BACKEND alone keeping the original un-prefixed diagram

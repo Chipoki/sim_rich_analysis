@@ -62,6 +62,5 @@ def test_extract_level_raises_when_no_images(patch_result_dirs, tiny_image_dir):
 def test_get_extractor_dispatch():
     assert isinstance(embeddings.get_extractor("resnet50_places365"), embeddings.ResNetPlacesExtractor)
     assert isinstance(embeddings.get_extractor("dinov2"), embeddings.DinoV2Extractor)
-    assert isinstance(embeddings.get_extractor("dinov3"), embeddings.DinoV3Extractor)
     with pytest.raises(ValueError):
         embeddings.get_extractor("not_a_real_backend")
