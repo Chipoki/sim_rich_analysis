@@ -77,10 +77,14 @@ def test_best_layer_per_participant_picks_max_r():
 
     result = analysis.best_layer_per_participant(wide, "letters", {"a": layer_a, "b": layer_b})
 
+    assert list(result.columns) == ["pearson_r", "best_layer"]
     per_layer_a = analysis.per_participant_correlations(wide, "letters", layer_a)
     per_layer_b = analysis.per_participant_correlations(wide, "letters", layer_b)
     for pid in ["p1", "p2", "p3", "p4", "p5"]:
-        assert result[pid] == pytest.approx(max(per_layer_a[pid], per_layer_b[pid]))
+        expected_best = max(per_layer_a[pid], per_layer_b[pid])
+        assert result.loc[pid, "pearson_r"] == pytest.approx(expected_best)
+        expected_layer = "a" if per_layer_a[pid] >= per_layer_b[pid] else "b"
+        assert result.loc[pid, "best_layer"] == expected_layer
 
 
 def test_avg_vector_correlation_matches_group_mean():
@@ -158,3 +162,46 @@ def test_paired_level_test_real_difference_gives_valid_p():
 
     assert note["n"] == 6
     assert 0.0 <= note["p_value"] <= 1.0
+
+
+def _make_block_assignment():
+    data = {
+        ("letters", "p1"): [0, 0, 1, 1],
+        ("letters", "p2"): [0, 1, 0, 1],
+    }
+    block_assignment = pd.DataFrame(data, index=["a", "b", "c", "d"])
+    block_assignment.columns = pd.MultiIndex.from_tuples(block_assignment.columns)
+    return block_assignment
+
+
+def test_per_participant_correlations_by_block():
+    data = {("letters", "p1"): [1, 2, 3, 4], ("letters", "p2"): [4, 3, 2, 1]}
+    wide = pd.DataFrame(data, index=["a", "b", "c", "d"])
+    wide.columns = pd.MultiIndex.from_tuples(wide.columns)
+    block_assignment = _make_block_assignment()
+    model = pd.Series([1, 2, 3, 4], index=wide.index)
+
+    result = analysis.per_participant_correlations_by_block(wide, block_assignment, "letters", model)
+
+    assert set(result.keys()) == {0, 1}
+    # p1 block 0 = rows a,b: human [1,2] vs model [1,2] -> perfectly correlated
+    assert result[0]["p1"] == pytest.approx(1.0)
+    # p1 block 1 = rows c,d: human [3,4] vs model [3,4] -> perfectly correlated
+    assert result[1]["p1"] == pytest.approx(1.0)
+    # p2 block 0 = rows a,c: human [4,2] vs model [1,3] -> perfectly anti-correlated
+    assert result[0]["p2"] == pytest.approx(-1.0)
+
+
+def test_per_participant_correlations_by_block_respects_exclusion():
+    data = {("letters", "p1"): [1, 2, 3, 4], ("letters", "p2"): [4, 3, 2, 1]}
+    wide = pd.DataFrame(data, index=["a", "b", "c", "d"])
+    wide.columns = pd.MultiIndex.from_tuples(wide.columns)
+    block_assignment = _make_block_assignment()
+    model = pd.Series([1, 2, 3, 4], index=wide.index)
+
+    result = analysis.per_participant_correlations_by_block(
+        wide, block_assignment, "letters", model, excluded={"p2"}
+    )
+
+    for block_series in result.values():
+        assert set(block_series.index) == {"p1"}

@@ -57,15 +57,18 @@ def test_run_end_to_end_smoke(synthetic_pipeline_env):
 
     for condition in ["letters", "no_letters"]:
         for suffix in (
-            "degradation_levels", "best_layer", "avg_vector", "desaturation", "degradation_vs_noise_ceiling",
+            "degradation_levels", "best_layer", "avg_vector", "desaturation",
+            "degradation_vs_noise_ceiling", "by_block",
         ):
             assert (config.DIAGRAMS_DIR / f"{condition}_{suffix}.png").exists()
+    assert (config.DIAGRAMS_DIR / "letters_accuracy_by_block.png").exists()
 
     with open(results_path, "rb") as f:
         results = pickle.load(f)
 
     assert set(results.keys()) == {"letters", "no_letters"}
-    for condition_results in results.values():
-        assert set(condition_results.keys()) == {
-            "r_by_level", "best_layer_by_level", "avg_r_by_level", "r_by_desat", "loo", "split_half",
-        }
+    common_keys = {
+        "r_by_level", "best_layer_by_level", "avg_r_by_level", "r_by_desat", "r_by_block", "loo", "split_half",
+    }
+    assert set(results["no_letters"].keys()) == common_keys
+    assert set(results["letters"].keys()) == common_keys | {"letter_accuracy_by_block"}

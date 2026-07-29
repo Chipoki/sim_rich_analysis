@@ -49,19 +49,54 @@ def per_participant_correlations(
     return pd.Series(out, name="pearson_r")
 
 
+def per_participant_correlations_by_block(
+    wide: pd.DataFrame,
+    block_assignment: pd.DataFrame,
+    condition: str,
+    model_similarity: pd.Series,
+    excluded: set = frozenset(),
+) -> dict[int, pd.Series]:
+    """
+    Same idea as per_participant_correlations, but computed separately within
+    each experimental presentation block: for each participant, restrict to
+    only the ~40 pair_ids that participant actually saw in that block (block
+    membership is independently randomized per participant -- see
+    sim_vectors.build_block_assignment -- so this subset differs person to
+    person) before computing that block's Pearson r.
+    """
+    pids = _included_participants(wide, condition, excluded)
+    model_similarity = model_similarity.reindex(wide.index)
+    blocks = sorted(int(b) for b in pd.unique(block_assignment[condition].to_numpy().ravel()))
+    out = {b: {} for b in blocks}
+    for pid in progress.bar(pids, desc=f"{condition} participants (by block)", depth=progress.STEP):
+        participant_blocks = block_assignment[(condition, pid)]
+        human = wide[(condition, pid)]
+        for b in blocks:
+            mask = (participant_blocks == b).to_numpy()
+            r, _p = pearsonr(human[mask], model_similarity[mask])
+            out[b][pid] = r
+    return {b: pd.Series(vals, name="pearson_r") for b, vals in out.items()}
+
+
 def best_layer_per_participant(
     wide: pd.DataFrame, condition: str, similarity_by_layer: dict[str, pd.Series], excluded: set = frozenset()
-) -> pd.Series:
+) -> pd.DataFrame:
     """
     Per level (caller passes one level's similarity_by_layer = {layer: series}),
     for each participant pick whichever of the examined layers correlates best.
+
+    Returns a DataFrame indexed by participant, with columns:
+      - "pearson_r": that participant's best-layer correlation.
+      - "best_layer": which layer key (of similarity_by_layer) produced it --
+        needed so callers can show, not just the winning score, but which of
+        the examined layers won for each participant.
     """
     per_layer = {
         layer: per_participant_correlations(wide, condition, sim, excluded)
         for layer, sim in similarity_by_layer.items()
     }
     table = pd.DataFrame(per_layer)
-    return table.max(axis=1)
+    return pd.DataFrame({"pearson_r": table.max(axis=1), "best_layer": table.idxmax(axis=1)})
 
 
 def avg_vector_correlation(

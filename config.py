@@ -95,6 +95,15 @@ LAYERS = {
 }
 DEFAULT_LAYER = "avgpool"
 
+# Colorblind-safe qualitative palette (ColorBrewer "Dark2"), one color per
+# layer -- used to color-code which layer won a per-participant "best layer"
+# comparison (plotting.py).
+LAYER_COLORS = {
+    "avgpool": "#1b9e77",
+    "layer4": "#d95f02",
+    "classifier": "#7570b3",
+}
+
 DINOV2_MODEL_NAME = "dinov2_vits14"  # used only if BACKEND == "dinov2"
 
 # CPU-only batching -- kept small to stay well inside 16 GB RAM.

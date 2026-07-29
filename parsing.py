@@ -132,3 +132,18 @@ def letter_accuracy_by_participant(df: pd.DataFrame) -> pd.Series:
     """Per-participant L/T discrimination accuracy (letters condition only)."""
     letters = df[df["condition"] == "letters"]
     return letters.groupby("participant_id")["letter_discrimination_correct"].mean()
+
+
+def letter_accuracy_by_participant_and_block(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Per-participant, per-block L/T discrimination accuracy (letters condition
+    only). Index = participant_id, columns = block_index (0..4), values =
+    that participant's accuracy within that experimental block -- a vigilance/
+    fatigue diagnostic at finer grain than the single overall accuracy figure.
+    """
+    letters = df[df["condition"] == "letters"]
+    return (
+        letters.groupby(["participant_id", "block_index"])["letter_discrimination_correct"]
+        .mean()
+        .unstack("block_index")
+    )

@@ -30,6 +30,26 @@ def build_human_similarity_vectors(df: pd.DataFrame) -> pd.DataFrame:
     return wide
 
 
+def build_block_assignment(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Wide table of each participant's experimental block index per pair_id --
+    same shape as build_human_similarity_vectors' output (index = pair_id,
+    columns = (condition, participant_id) MultiIndex), but the value is which
+    of the 5 presentation blocks that pair fell into for that participant.
+
+    Block membership is independently randomized per participant (verified
+    against the real data), so -- unlike, say, the level a pair belongs to --
+    this is genuinely a per-(pair_id, participant) lookup, not a constant.
+    """
+    wide = df.pivot_table(
+        index="pair_id",
+        columns=["condition", "participant_id"],
+        values="block_index",
+        aggfunc="first",
+    )
+    return wide.sort_index()
+
+
 def get_vector(wide: pd.DataFrame, condition: str, participant_id: str) -> pd.Series:
     """Convenience accessor for one participant's ordered rating vector."""
     return wide[(condition, participant_id)]

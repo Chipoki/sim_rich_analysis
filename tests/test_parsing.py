@@ -74,6 +74,25 @@ def test_letter_accuracy_by_participant(pair_ids):
     assert acc["p1"] == pytest.approx(2 / 3)
 
 
+def test_letter_accuracy_by_participant_and_block(pair_ids):
+    letter_correct = {pair_ids[0]: True, pair_ids[1]: False, pair_ids[2]: True}
+    trials = make_participant_trials("p1", "letters", pair_ids, letter_correct=letter_correct)
+    _meta, rows = parsing._parse_participant(trials, "letters")
+    df = pd.DataFrame(rows)
+    df["participant_id"] = "p1"
+    df["condition"] = "letters"
+    df["letter_discrimination_correct"] = df["letter_discrimination_correct"].astype("boolean")
+    # one pair per block, in row order (the fixture itself always uses
+    # block_index=0, so assign distinct blocks by hand to exercise grouping)
+    df["block_index"] = [0, 1, 2]
+
+    acc = parsing.letter_accuracy_by_participant_and_block(df)
+
+    assert acc.loc["p1", 0] == 1.0
+    assert acc.loc["p1", 1] == 0.0
+    assert acc.loc["p1", 2] == 1.0
+
+
 def test_load_all_merges_conditions_and_casts_dtype(write_result_file, pair_ids):
     letters_path = write_result_file(
         "letters.txt", "letters", [{"participant_id": "L1", "pair_ids": pair_ids}]

@@ -45,3 +45,23 @@ def test_save_load_round_trip(tmp_path):
     loaded = sim_vectors.load(path)
 
     pd.testing.assert_frame_equal(wide, loaded)
+
+
+def test_build_block_assignment_shape_and_per_participant_lookup():
+    rows = [
+        {"pair_id": "003_004", "condition": "letters", "participant_id": "p1", "block_index": 1},
+        {"pair_id": "001_002", "condition": "letters", "participant_id": "p1", "block_index": 0},
+        {"pair_id": "001_002", "condition": "letters", "participant_id": "p2", "block_index": 1},
+        {"pair_id": "003_004", "condition": "letters", "participant_id": "p2", "block_index": 0},
+    ]
+    df = pd.DataFrame(rows)
+
+    block_assignment = sim_vectors.build_block_assignment(df)
+
+    assert list(block_assignment.index) == ["001_002", "003_004"]
+    # block membership differs per participant for the same pair_id -- this
+    # is the whole point (independently randomized presentation order)
+    assert block_assignment.loc["001_002", ("letters", "p1")] == 0
+    assert block_assignment.loc["001_002", ("letters", "p2")] == 1
+    assert block_assignment.loc["003_004", ("letters", "p1")] == 1
+    assert block_assignment.loc["003_004", ("letters", "p2")] == 0

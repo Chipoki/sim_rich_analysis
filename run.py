@@ -48,7 +48,16 @@ def compute_all_embeddings(pair_ids: list[str]) -> dict[tuple[str, str], dict]:
     return out
 
 
-def _run_condition(condition: str, wide: pd.DataFrame, dist_vectors: pd.DataFrame, excl: set) -> dict:
+def _run_condition(
+    condition: str,
+    wide: pd.DataFrame,
+    dist_vectors: pd.DataFrame,
+    block_assignment: pd.DataFrame,
+    df: pd.DataFrame,
+    excl: set,
+) -> dict:
+    default_layer_label = config.LAYERS[config.DEFAULT_LAYER]
+
     # (1) Across degradation levels, default layer
     r_by_level = {}
     for level in progress.bar(config.DEGRADATION_LEVELS, desc=f"{condition}: degradation levels", depth=progress.STEP):
@@ -61,6 +70,8 @@ def _run_condition(condition: str, wide: pd.DataFrame, dist_vectors: pd.DataFram
     for level in progress.bar(config.DEGRADATION_LEVELS, desc=f"{condition}: best layer", depth=progress.STEP):
         sim_by_layer = {layer: distances.get_similarity(dist_vectors, level, layer) for layer in config.LAYERS}
         best_layer_by_level[level] = analysis.best_layer_per_participant(wide, condition, sim_by_layer, excl)
+    best_r_by_level = {lv: table["pearson_r"] for lv, table in best_layer_by_level.items()}
+    best_layer_cat_by_level = {lv: table["best_layer"] for lv, table in best_layer_by_level.items()}
 
     # (3) AVG-vector analysis
     avg_r_by_level = {}
@@ -77,6 +88,15 @@ def _run_condition(condition: str, wide: pd.DataFrame, dist_vectors: pd.DataFram
             wide, condition, distances.get_similarity(dist_vectors, level, config.DEFAULT_LAYER), excl
         )
 
+    # (5) Performance across experimental presentation blocks (Full level,
+    # default layer -- the actual stimulus condition participants saw; block
+    # membership is independently randomized per participant, see
+    # sim_vectors.build_block_assignment).
+    r_by_block_raw = analysis.per_participant_correlations_by_block(
+        wide, block_assignment, condition, distances.get_similarity(dist_vectors, "Full", config.DEFAULT_LAYER), excl
+    )
+    r_by_block = {f"Block {b}": series for b, series in r_by_block_raw.items()}
+
     # Reliability: LOO / noise ceiling + split-half
     loo = analysis.leave_one_out_reliability(wide, condition, excl)
     split_half = analysis.split_half_reliability(wide, condition, excl)
@@ -85,27 +105,62 @@ def _run_condition(condition: str, wide: pd.DataFrame, dist_vectors: pd.DataFram
     )
     noise_ceiling_by_level = {level: loo for level in config.DEGRADATION_LEVELS}
 
-    # Figures (5 per condition)
+    # Figures
     figure_calls = [
         lambda: plotting.bar_with_dots(
-            r_by_level, f"{condition} - degradation levels", filename=f"{condition}_degradation_levels.png"
+            r_by_level, f"{condition} - degradation levels (layer: {default_layer_label})",
+            xlabel="Degradation level", filename=f"{condition}_degradation_levels.png",
         ),
         lambda: plotting.bar_with_dots(
-            best_layer_by_level,
+            best_r_by_level,
             f"{condition} - layer with highest correlation (of {len(config.LAYERS)} examined)",
+            xlabel="Degradation level",
+            dot_categories_by_level=best_layer_cat_by_level,
+            category_colors=config.LAYER_COLORS,
+            category_labels=config.LAYERS,
             filename=f"{condition}_best_layer.png",
         ),
         lambda: plotting.bar_with_dots(
-            avg_r_by_level, f"{condition} - degradation levels (AVG vector)", filename=f"{condition}_avg_vector.png"
+            avg_r_by_level, f"{condition} - degradation levels, AVG vector (layer: {default_layer_label})",
+            xlabel="Degradation level", dot_label="AVG-vector value (all participants pooled)",
+            filename=f"{condition}_avg_vector.png",
         ),
         lambda: plotting.bar_with_dots(
-            r_by_desat, f"colors desaturation - {condition}", filename=f"{condition}_desaturation.png"
+            r_by_desat, f"colors desaturation - {condition} (layer: {default_layer_label})",
+            xlabel="Desaturation level", filename=f"{condition}_desaturation.png",
         ),
         lambda: plotting.bar_with_noise_ceiling(
-            r_by_level, noise_ceiling_by_level, f"{condition} - degradation levels vs noise ceiling",
-            filename=f"{condition}_degradation_vs_noise_ceiling.png",
+            r_by_level, noise_ceiling_by_level,
+            f"{condition} - degradation levels vs noise ceiling (layer: {default_layer_label})",
+            xlabel="Degradation level", filename=f"{condition}_degradation_vs_noise_ceiling.png",
+        ),
+        lambda: plotting.bar_with_dots(
+            r_by_block,
+            f"{condition} - performance across experimental blocks (Full, layer: {default_layer_label})",
+            xlabel="Experimental block", filename=f"{condition}_by_block.png",
         ),
     ]
+    if condition == "letters":
+        acc_by_participant_block = parsing.letter_accuracy_by_participant_and_block(df)
+        # Deliberately NOT excluding participants here: this is the very
+        # quantity the accuracy exclusion (config.LETTER_ACCURACY_THRESHOLD)
+        # is computed from, so showing everyone lets the excluded
+        # participant's trajectory visibly justify the exclusion instead of
+        # silently disappearing.
+        acc_by_block = {
+            f"Block {b}": acc_by_participant_block[b].dropna() for b in sorted(acc_by_participant_block.columns)
+        }
+        figure_calls.append(
+            lambda: plotting.bar_with_dots(
+                acc_by_block,
+                f"letters - letter-discrimination accuracy across experimental blocks "
+                f"(all {len(acc_by_participant_block)} participants, incl. excluded)",
+                ylabel="Accuracy", xlabel="Experimental block",
+                reference_lines={0.5: "chance (2AFC)", config.LETTER_ACCURACY_THRESHOLD: "exclusion threshold"},
+                filename="letters_accuracy_by_block.png",
+            )
+        )
+
     for call in progress.bar(figure_calls, total=len(figure_calls), desc=f"{condition}: figures", depth=progress.STEP):
         call()
 
@@ -114,14 +169,18 @@ def _run_condition(condition: str, wide: pd.DataFrame, dist_vectors: pd.DataFram
         note = analysis.paired_level_test(r_by_level, a, b)
         progress.write(f"   [{condition}] {a} vs {b}: Wilcoxon p={note['p_value']:.4f} (n={note['n']})")
 
-    return {
+    results = {
         "r_by_level": r_by_level,
         "best_layer_by_level": best_layer_by_level,
         "avg_r_by_level": avg_r_by_level,
         "r_by_desat": r_by_desat,
+        "r_by_block": r_by_block,
         "loo": loo,
         "split_half": split_half,
     }
+    if condition == "letters":
+        results["letter_accuracy_by_block"] = acc_by_participant_block
+    return results
 
 
 def run():
@@ -134,6 +193,7 @@ def run():
         pbar.set_description(STAGES[1])
         wide = sim_vectors.build_human_similarity_vectors(df)
         sim_vectors.save(wide, config.DATA_DIR / "sim_vectors.pkl")
+        block_assignment = sim_vectors.build_block_assignment(df)
         excluded = analysis.get_excluded_participants(df)
         progress.write(f"2. Exclusions: {[(k, sorted(v)) for k, v in excluded.items()]}")
         pbar.update(1)
@@ -149,7 +209,7 @@ def run():
         results = {}
         conditions = progress.bar(["letters", "no_letters"], total=2, desc="Conditions", depth=progress.STAGE)
         for condition in conditions:
-            results[condition] = _run_condition(condition, wide, dist_vectors, excluded[condition])
+            results[condition] = _run_condition(condition, wide, dist_vectors, block_assignment, df, excluded[condition])
         pbar.update(1)
 
     with open(config.DATA_DIR / "analysis_results.pkl", "wb") as f:
