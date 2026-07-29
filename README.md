@@ -26,10 +26,13 @@ everything to a **third**, sibling folder:
 └── web_analysis_results/          # created automatically by run.py
     ├── data/
     │   ├── sim_vectors.pkl
-    │   ├── dist_vectors.pkl
+    │   ├── dist_vectors.pkl            # primary backend (config.BACKEND)
+    │   ├── dist_vectors_dinov3.pkl     # one per config.EXTRA_BACKENDS entry
     │   ├── analysis_results.pkl
     │   └── embeddings/<level>_<layer>.pkl
-    └── diagrams/*.png
+    └── diagrams/
+        ├── */*.png                    # primary backend's figures
+        └── dinov3/*/*.png             # same figure set, DinoV3 embeddings
 ```
 
 If your raw-data folder isn't literally named `src_data`, update
@@ -104,9 +107,22 @@ Each analysis figure is displayed and saved to
   has `*_pairs.csv`, no `*_embeddings.csv`) — this project never reads
   them, it recomputes embeddings fresh, so that's fine either way.
 
-  `DinoV2Extractor` is implemented behind the same interface (per the
-  original prompt's aspirational ask) but is **not** the default; it needs
-  internet access on first run to fetch weights via `torch.hub`.
+  `DinoV2Extractor` and `DinoV3Extractor` are implemented behind the same
+  interface (per the original prompt's aspirational ask) but are **not**
+  the default backend; both need internet access on first run to fetch
+  weights via `torch.hub`.
+
+  `config.EXTRA_BACKENDS` (default `["dinov3"]`) additionally runs the
+  *entire* per-condition figure set (degradation levels, best-layer, AVG
+  vector, desaturation, noise ceiling, blocks, cross-condition comparisons)
+  a second time using DinoV3 embeddings instead of ResNet-Places50's,
+  alongside (not instead of) the primary backend's figures -- see
+  `run.py`'s module docstring. Since DinoV2/DinoV3 expose one pooled
+  embedding rather than 3 named layers, they're run through the same
+  per-layer plumbing as a size-1 "layers" dict keyed by the backend's own
+  name (`config.SINGLE_LAYER_BACKEND_LABELS` / `_COLORS`) -- the best-layer
+  figure is consequently a (harmless) best-of-1 for these backends. Set
+  `config.EXTRA_BACKENDS = []` to disable and only run `config.BACKEND`.
 
 - **Distances** (`distances.py`): cosine distance throughout. These CNN
   layers are ReLU-activated (non-negative), so cosine distance stays in
@@ -121,13 +137,17 @@ Each analysis figure is displayed and saved to
   `None` (N=20, all included).
 - **Reliability**: `leave_one_out_reliability()` doubles as both the
   PDF's headlined R_LOO and the noise ceiling plotted alongside model
-  bars. `split_half_reliability()` is Spearman-Brown corrected. Both were
-  validated against the PDF's headline numbers using the real rating data
-  during development: computed R_LOO ≈ 0.39 (Letters) / 0.73 (No-Letters)
-  vs. the PDF's ≈0.44 / ≈0.78 — in the right ballpark and same direction
-  (No-Letters much more reliable), with the remaining gap plausibly
-  explained by the still-unresolved No-Letters exclusion above and by
-  this being a different (web) data collection than the original PDF's.
+  bars. `split_half_reliability()` is Spearman-Brown corrected over
+  `config.SPLIT_HALF_N_ITER` (1000) random participant-split iterations.
+  Both were validated against the PDF's headline numbers using the real
+  rating data during development: computed R_LOO ≈ 0.39 (Letters) / 0.73
+  (No-Letters) vs. the PDF's ≈0.44 / ≈0.78 — in the right ballpark and same
+  direction (No-Letters much more reliable), with the remaining gap
+  plausibly explained by the still-unresolved No-Letters exclusion above
+  and by this being a different (web) data collection than the original
+  PDF's. Every "vs noise ceiling" figure carries a symbolic footnote
+  naming both r values' source (LOO / split-half + its iteration count),
+  so the methodology behind the plotted numbers is never left implicit.
 - **CPU / memory**: batching is small (`config.BATCH_SIZE = 8`) and
   images are resized to 224×224 before the model ever sees them, so peak
   memory during embedding extraction stays well under 16 GB. Embeddings
@@ -141,7 +161,7 @@ Each analysis figure is displayed and saved to
 | `config.py` | paths, folder maps, layer names, exclusions, all constants |
 | `parsing.py` | raw JSON → tidy long-format DataFrame |
 | `sim_vectors.py` | tidy DataFrame → per-participant human similarity vectors |
-| `embeddings.py` | CPU image embedding extraction + disk caching (ResNet-Places50 / DINOv2) |
+| `embeddings.py` | CPU image embedding extraction + disk caching (ResNet-Places50 / DINOv2 / DINOv3) |
 | `distances.py` | embeddings → per-pair cosine distance/similarity vectors |
 | `analysis.py` | correlations, best-layer selection, AVG-vector R, split-half, LOO/noise ceiling, paired stats |
 | `plotting.py` | bar + per-participant-dot figures |

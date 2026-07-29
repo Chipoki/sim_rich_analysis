@@ -15,7 +15,8 @@ def test_extract_level_computes_and_caches_all_layers(patch_result_dirs, tiny_im
     result = extractor.extract_level("Full", image_dir, ["avgpool", "layer4", "classifier"])
 
     assert set(result.keys()) == {"avgpool", "layer4", "classifier"}
-    for layer, dim in StubExtractor.LAYER_DIMS.items():
+    for layer in ("avgpool", "layer4", "classifier"):
+        dim = StubExtractor.LAYER_DIMS[layer]
         assert set(result[layer].keys()) == {"001", "002", "003"}
         assert result[layer]["001"].shape == (dim,)
     assert extractor.forward_calls == 1  # 3 images < BATCH_SIZE -> single batch
@@ -61,5 +62,6 @@ def test_extract_level_raises_when_no_images(patch_result_dirs, tiny_image_dir):
 def test_get_extractor_dispatch():
     assert isinstance(embeddings.get_extractor("resnet50_places365"), embeddings.ResNetPlacesExtractor)
     assert isinstance(embeddings.get_extractor("dinov2"), embeddings.DinoV2Extractor)
+    assert isinstance(embeddings.get_extractor("dinov3"), embeddings.DinoV3Extractor)
     with pytest.raises(ValueError):
         embeddings.get_extractor("not_a_real_backend")

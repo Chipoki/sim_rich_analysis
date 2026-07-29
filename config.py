@@ -80,7 +80,14 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")  # tried in this order per level
 # Embedding backend
 # --------------------------------------------------------------------------
 
-BACKEND = "resnet50_places365"  # or "dinov2"
+BACKEND = "resnet50_places365"  # or "dinov2" / "dinov3"
+
+# Backends *additionally* run end-to-end (embeddings -> analysis -> the same
+# figure set produced for BACKEND) alongside the primary one, each writing
+# its own figures under a diagrams/<backend>/ sub-tree so they never
+# overwrite the primary backend's outputs.
+EXTRA_BACKENDS = ["dinov3"]
+
 RESNET_WEIGHTS_PATH = SRC_DATA_DIR / "resnet50_places365.pth.tar"
 RESNET_NUM_CLASSES = 365
 
@@ -105,6 +112,15 @@ LAYER_COLORS = {
 }
 
 DINOV2_MODEL_NAME = "dinov2_vits14"  # used only if BACKEND == "dinov2"
+DINOV3_MODEL_NAME = "dinov3_vits16"  # used only if BACKEND/EXTRA_BACKENDS includes "dinov3"
+
+# Every backend other than resnet50_places365 exposes a single pooled
+# embedding (no per-layer breakdown), keyed by the backend's own name so it
+# can be run through the same per-layer plumbing as resnet50_places365's
+# LAYERS/LAYER_COLORS (a size-1 "layers" dict instead of size-3). Internal
+# key -> human label / hex color, mirroring LAYERS / LAYER_COLORS above.
+SINGLE_LAYER_BACKEND_LABELS = {"dinov2": "DinoV2", "dinov3": "DinoV3"}
+SINGLE_LAYER_BACKEND_COLORS = {"dinov2": "#e7298a", "dinov3": "#66a61e"}
 
 # CPU-only batching -- kept small to stay well inside 16 GB RAM.
 BATCH_SIZE = 8

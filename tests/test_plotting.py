@@ -162,6 +162,40 @@ def test_bar_with_noise_ceiling_custom_labels_and_colors(monkeypatch, patch_resu
     plotting.plt.close(fig)
 
 
+def test_bar_with_noise_ceiling_footnote_rendered(monkeypatch, patch_result_dirs):
+    """The reliability-provenance footnote (LOO / split-half + iteration
+    count) must actually be drawn on the figure when passed, not just
+    accepted and discarded."""
+    _keep_figure_open(monkeypatch)
+    values = _series_by_level()
+    ceiling = {"Full": pd.Series({"p1": 0.9, "p2": 0.7}), "Deg05": pd.Series({"p1": 0.9, "p2": 0.7})}
+
+    plotting.bar_with_noise_ceiling(
+        values, ceiling, "title", filename=None,
+        footnote="Noise ceiling = LOO. Split-half (SB, 1000 iterations): 0.73.",
+    )
+
+    fig = plotting.plt.gcf()
+    texts = [t.get_text() for t in fig.axes[0].texts]
+    assert any("1000 iterations" in t for t in texts)
+    plotting.plt.close(fig)
+
+
+def test_bar_with_noise_ceiling_no_footnote_by_default(monkeypatch, patch_result_dirs):
+    """No footnote= given -> no italic footnote text; bar_label's own value
+    labels are unaffected (they're normal-style, not italic)."""
+    _keep_figure_open(monkeypatch)
+    values = _series_by_level()
+    ceiling = {"Full": pd.Series({"p1": 0.9, "p2": 0.7}), "Deg05": pd.Series({"p1": 0.9, "p2": 0.7})}
+
+    plotting.bar_with_noise_ceiling(values, ceiling, "title", filename=None)
+
+    fig = plotting.plt.gcf()
+    italic_texts = [t.get_text() for t in fig.axes[0].texts if t.get_style() == "italic"]
+    assert italic_texts == []
+    plotting.plt.close(fig)
+
+
 def test_save_and_show_creates_category_subdirectory(patch_result_dirs):
     plotting.bar_with_dots(_series_by_level(), "title", filename="degradation/nested.png")
 

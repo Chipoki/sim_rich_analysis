@@ -163,12 +163,18 @@ def bar_with_noise_ceiling(
     series_b_color: str = "lightblue",
     series_a_dot_color: str = "black",
     series_b_dot_color: str = "navy",
+    footnote: str | None = None,
 ):
     """
     Two side-by-side bar+dot series per level. Originally written for
     model-vs-noise-ceiling specifically (hence the default labels/colors),
     but the shape -- two named per-level series compared side by side -- is
     general, e.g. also reused for a Letters-vs-No-Letters comparison.
+
+    footnote (optional): a short symbolic note rendered below the legend --
+    used by the model-vs-noise-ceiling figures to name the reliability
+    methodology behind the plotted r values (LOO / split-half + iteration
+    count), so that provenance isn't left implicit.
     """
     levels = list(values_by_level.keys())
     model_means = [values_by_level[lv].mean() for lv in levels]
@@ -211,6 +217,8 @@ def bar_with_noise_ceiling(
         [_level_ticklabel(lv, len(values_by_level[lv])) for lv in levels], rotation=30, ha="right"
     )
     _legend_below(ax, legend_handles)
+    if footnote:
+        ax.text(0.5, -0.38, footnote, transform=ax.transAxes, ha="center", fontsize=7, style="italic", wrap=True)
 
     if filename:
         _save_and_show(fig, filename)
