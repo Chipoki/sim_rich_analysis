@@ -198,7 +198,12 @@ class DinoV2Extractor(EmbeddingExtractor):
 
 class DinoV3Extractor(EmbeddingExtractor):
     """Single-layer (patch-token-averaged) DINOv3 embedding. Needs internet
-    on first run to download pretrained weights via torch.hub."""
+    on first run to download pretrained weights via torch.hub. The upstream
+    repo's hubconf.py eagerly imports its full eval suite (classifiers/
+    depthers/detectors/dinotxt/segmentors), not just the plain backbone
+    called here, so loading it needs omegaconf/torchmetrics/termcolor on
+    top of torch/torchvision even though this project never touches those
+    other entrypoints -- see environment.yml."""
 
     def _load_model(self):
         import torch

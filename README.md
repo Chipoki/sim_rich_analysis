@@ -110,7 +110,13 @@ Each analysis figure is displayed and saved to
   `DinoV2Extractor` and `DinoV3Extractor` are implemented behind the same
   interface (per the original prompt's aspirational ask) but are **not**
   the default backend; both need internet access on first run to fetch
-  weights via `torch.hub`.
+  weights via `torch.hub`. DinoV3's `hubconf.py` eagerly imports the
+  upstream repo's *entire* eval suite (classifiers/depthers/detectors/
+  dinotxt/segmentors), not just the plain backbone this project calls, so
+  `torch.hub.load("facebookresearch/dinov3", ...)` transitively needs
+  `omegaconf`, `torchmetrics` and `termcolor` even though none of them are
+  used by the code path this project actually exercises -- already in
+  `environment.yml`.
 
   `config.EXTRA_BACKENDS` (default `["dinov3"]`) additionally runs the
   *entire* per-condition figure set (degradation levels, best-layer, AVG
