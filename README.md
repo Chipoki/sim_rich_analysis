@@ -124,6 +124,13 @@ Each analysis figure is displayed and saved to
   figure is consequently a (harmless) best-of-1 for this backend. Set
   `config.EXTRA_BACKENDS = []` to disable and only run `config.BACKEND`.
 
+  DinoV2's single pooled embedding (final-block CLS token) is one arbitrary
+  choice among many possible depth/pooling combinations --
+  `supplemental/dinov2_layer_grid_search/` is a standalone script (not part
+  of `run.py`) that grid-searches DINOv2's 12 transformer blocks x
+  {cls, mean-pooled patch tokens} against human similarity judgments to find
+  which combination correlates best; see its own README for details.
+
 - **Distances** (`distances.py`): cosine distance throughout. These CNN
   layers are ReLU-activated (non-negative), so cosine distance stays in
   `[0, 1]` and `similarity = 1 - distance` is a valid bounded similarity.
