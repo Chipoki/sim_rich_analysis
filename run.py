@@ -6,18 +6,36 @@ Steps:
   2. Build human similarity vectors (cached to data/sim_vectors.pkl).
   3. For config.BACKEND and every backend in config.EXTRA_BACKENDS (e.g.
      "dinov2"), extract embeddings for every stimulus level/layer needed
-     (cached under data/embeddings/), compute distance/similarity vectors
-     (cached to data/dist_vectors.pkl for config.BACKEND, data/dist_vectors_
-     <backend>.pkl for each extra one).
+     (cached under data/embeddings/<short name>/, e.g. data/embeddings/
+     resnet50/ and data/embeddings/dinov2/ -- config.BACKEND_DIR_NAMES),
+     compute distance/similarity vectors (cached to data/dist_vectors.pkl for
+     config.BACKEND, data/dist_vectors_<backend>.pkl for each extra one). If
+     "dinov2" is one of these backends and supplemental/dinov2_layer_grid_search
+     has already been run (see config.DINOV2_GRID_SEARCH_RESULTS_PATH), its top
+     config.DINOV2_GRID_TOP_N ranked (block, pooling) configs are used as
+     dinov2's "layers" in place of the single default pooled embedding -- see
+     embeddings.dinov2_grid_layers() and run._layers_for_backend().
   4. Run the analyses from spec §4, once per backend, and save one figure
-     per analysis to diagrams/, organized into sub-directories by what the
-     figure varies: diagrams/degradation/, diagrams/desaturation/,
-     diagrams/experimental_blocks/, diagrams/individual_differences/.
-     config.BACKEND's figures use those paths directly; every extra
-     backend's figures go under the equivalent diagrams/<backend>/ sub-tree
-     instead, so nothing is overwritten. The (purely behavioral, embedding-
-     independent) letters_accuracy_by_block figure is only ever generated
-     once, from config.BACKEND's run.
+     per analysis under diagrams/<short name>/ (config.BACKEND_DIR_NAMES),
+     organized into sub-directories by what the figure varies:
+     degradation/, desaturation/, experimental_blocks/, individual_differences/.
+     Every backend -- config.BACKEND included -- gets its own sub-tree, so
+     nothing is overwritten. Two kinds of figures are exceptions to this
+     per-backend nesting:
+       - letters_accuracy_by_block.png (purely behavioral, no embeddings
+         involved) sits at the top-level diagrams/experimental_blocks/ and is
+         only ever generated once, from config.BACKEND's run.
+       - Cross-model comparisons (e.g. ResNet50-Places365 vs DinoV2's
+         best-layer correlation per level) sit under diagrams/integrated/,
+         built once after every backend has run -- see
+         run._run_integrated_figures() and config.INTEGRATED_DIAGRAMS_DIR.
+     Each backend's own degradation/ sub-tree additionally gets a
+     letters_vs_no_letters_ratio_<layer>.png line plot per examined layer,
+     alongside the existing letters_vs_no_letters_<layer>.png bar figure --
+     a companion view of the *ratio* of mean correlation between adjacent
+     degradation levels (Full:Deg05, Deg05:Deg3, Deg3:Tunnel), rather than
+     each level's absolute value -- see plotting.ratio_line_plot() and
+     run._transition_ratios().
 
 Progress is reported via a pinned multi-line tqdm dashboard (see progress.py):
 depth 0 tracks the 4 stages above, depth 1/2 track each stage's sub-loops.
@@ -43,22 +61,63 @@ def get_pair_ids(df: pd.DataFrame) -> list[str]:
     return sorted(df["pair_id"].unique())
 
 
+def _degradation_transitions() -> list[tuple[str, str]]:
+    """Adjacent-level pairs within config.DEGRADATION_LEVELS (e.g. [("Full",
+    "Deg05"), ("Deg05", "Deg3"), ("Deg3", "Tunnel")]) -- the transitions the
+    ratio-line-plot figures track. A function, not a module-level constant,
+    so it re-reads config.DEGRADATION_LEVELS on every call rather than
+    freezing it at import time (tests monkeypatch config.DEGRADATION_LEVELS
+    to a shorter list)."""
+    return list(zip(config.DEGRADATION_LEVELS, config.DEGRADATION_LEVELS[1:]))
+
+
+def _degradation_transition_labels() -> list[str]:
+    return [f"{a}:{b}" for a, b in _degradation_transitions()]
+
+
+def _transition_ratios(by_level: dict[str, pd.Series]) -> list[float]:
+    """[mean(by_level[b]) / mean(by_level[a]) for each adjacent (a, b) in
+    _degradation_transitions()] -- ratio < 1 means the mean correlation
+    dropped moving to the more-degraded level b. Matches
+    plotting.ratio_line_plot's expected "later level / earlier level"
+    direction."""
+    return [by_level[b].mean() / by_level[a].mean() for a, b in _degradation_transitions()]
+
+
 def _layers_for_backend(backend: str) -> dict[str, str]:
     """Internal layer key -> human label for whichever backend is active.
-    resnet50_places365 exposes the 3 examined layers (config.LAYERS); every
-    other backend exposes a single pooled embedding keyed by its own name."""
+    resnet50_places365 exposes the 3 examined layers (config.LAYERS); dinov2
+    exposes the top config.DINOV2_GRID_TOP_N (block, pooling) configs from
+    the supplemental grid search if it's already been run (see
+    embeddings.dinov2_grid_layers()); every other case (including dinov2
+    without a grid search on disk) exposes a single pooled embedding keyed by
+    its own name."""
     if backend == "resnet50_places365":
         return config.LAYERS
+    if backend == "dinov2":
+        grid_layers = embeddings.dinov2_grid_layers()
+        if grid_layers:
+            return grid_layers
     return {backend: config.SINGLE_LAYER_BACKEND_LABELS[backend]}
 
 
 def _default_layer_for_backend(backend: str) -> str:
-    return config.DEFAULT_LAYER if backend == "resnet50_places365" else backend
+    if backend == "resnet50_places365":
+        return config.DEFAULT_LAYER
+    if backend == "dinov2":
+        grid_layers = embeddings.dinov2_grid_layers()
+        if grid_layers:
+            return next(iter(grid_layers))  # top-ranked config
+    return backend
 
 
 def _layer_colors_for_backend(backend: str) -> dict[str, str]:
     if backend == "resnet50_places365":
         return config.LAYER_COLORS
+    if backend == "dinov2":
+        grid_layers = embeddings.dinov2_grid_layers()
+        if grid_layers:
+            return embeddings.dinov2_grid_layer_colors(grid_layers)
     return {backend: config.SINGLE_LAYER_BACKEND_COLORS[backend]}
 
 
@@ -91,10 +150,11 @@ def _run_condition(
     default_layer = _default_layer_for_backend(backend)
     default_layer_label = layers[default_layer]
     layer_colors = _layer_colors_for_backend(backend)
-    # The primary backend keeps the existing un-prefixed diagram paths;
-    # every extra backend (see config.EXTRA_BACKENDS) gets its own
-    # diagrams/<backend>/ sub-tree so nothing overwrites the primary output.
-    prefix = "" if backend == config.BACKEND else f"{backend}/"
+    # Every backend (config.BACKEND included -- no special-cased unprefixed
+    # path) gets its own diagrams/<short name>/ sub-tree, per
+    # config.BACKEND_DIR_NAMES, so nothing overwrites another backend's
+    # output.
+    prefix = f"{config.BACKEND_DIR_NAMES.get(backend, backend)}/"
 
     # (1) Across degradation levels, default layer
     r_by_level = {}
@@ -264,7 +324,7 @@ def _run_cross_condition_figures(condition_results: dict, df: pd.DataFrame, back
     layers = _layers_for_backend(backend)
     default_layer = _default_layer_for_backend(backend)
     default_layer_label = layers[default_layer]
-    prefix = "" if backend == config.BACKEND else f"{backend}/"
+    prefix = f"{config.BACKEND_DIR_NAMES.get(backend, backend)}/"
 
     # Letters-vs-No-Letters, across degradation levels, once per examined
     # layer (not just the default) -- point (1) of the "per-layer" request:
@@ -285,6 +345,17 @@ def _run_cross_condition_figures(condition_results: dict, df: pd.DataFrame, back
             series_a_color="steelblue", series_b_color="salmon",
             series_a_dot_color="navy", series_b_dot_color="darkred",
             filename=f"{prefix}degradation/letters_vs_no_letters_{layer}.png",
+        )
+
+        # Companion view: not each level's absolute r, but how much it
+        # changes relative to the *previous* (less-degraded) level -- makes
+        # it easy to see whether Letters and No-Letters degrade at the same
+        # rate, or diverge at a specific transition.
+        plotting.ratio_line_plot(
+            {"letters": _transition_ratios(letters_by_level), "no_letters": _transition_ratios(no_letters_by_level)},
+            _degradation_transition_labels(),
+            f"Letters vs No-Letters: degradation-transition correlation ratio (layer: {layers[layer]})",
+            filename=f"{prefix}degradation/letters_vs_no_letters_ratio_{layer}.png",
         )
 
     # Individual differences: does how long someone took to judge similarity
@@ -313,12 +384,50 @@ def _run_cross_condition_figures(condition_results: dict, df: pd.DataFrame, back
     )
 
 
+def _run_integrated_figures(results: dict, backends: list[str]) -> None:
+    """Cross-model comparison figures (e.g. ResNet50-Places365 vs DinoV2) --
+    unlike every other figure in this pipeline (generated once per backend,
+    independently), these need >1 backend's results at once, so they run
+    once, after every backend in `backends` has completed, and are saved
+    under diagrams/integrated/ rather than any single backend's own
+    diagrams/<name>/ sub-tree (see config.INTEGRATED_DIAGRAMS_DIR)."""
+    primary = config.BACKEND
+    extra_backends = [b for b in backends if b != primary]
+    if primary not in results or not extra_backends:
+        return
+    primary_label = config.BACKEND_DIR_NAMES.get(primary, primary)
+
+    for extra in progress.bar(extra_backends, desc="Integrated: model comparisons", depth=progress.STAGE):
+        extra_label = config.BACKEND_DIR_NAMES.get(extra, extra)
+        conditions = [c for c in results[primary] if c in results[extra]]
+        for condition in conditions:
+            # Best-layer r (each model's best-of-N-examined-layers shot, not
+            # tied to one specific layer) is the fairest whole-model
+            # comparison -- see analysis.best_layer_per_participant.
+            primary_best_r = {
+                lv: results[primary][condition]["best_layer_by_level"][lv]["pearson_r"]
+                for lv in config.DEGRADATION_LEVELS
+            }
+            extra_best_r = {
+                lv: results[extra][condition]["best_layer_by_level"][lv]["pearson_r"]
+                for lv in config.DEGRADATION_LEVELS
+            }
+            plotting.bar_with_noise_ceiling(
+                primary_best_r, extra_best_r,
+                f"{condition} - best-layer correlation: {primary_label} vs {extra_label}",
+                xlabel="Degradation level",
+                series_a_label=primary_label, series_b_label=extra_label,
+                series_a_color="steelblue", series_b_color="mediumseagreen",
+                series_a_dot_color="navy", series_b_dot_color="darkgreen",
+                filename=f"integrated/{condition}_{primary_label}_vs_{extra_label}_best_layer.png",
+            )
+
+
 def run():
     # config.BACKEND first, then any config.EXTRA_BACKENDS (e.g. "dinov2"),
     # de-duplicated in case a backend appears in both -- each one gets the
-    # exact same figure set (see _run_condition/_run_cross_condition_figures),
-    # with config.BACKEND alone keeping the original un-prefixed diagram
-    # paths so existing outputs/consumers are unaffected.
+    # exact same figure set (see _run_condition/_run_cross_condition_figures)
+    # under its own diagrams/<name>/ sub-tree (config.BACKEND_DIR_NAMES).
     backends = list(dict.fromkeys([config.BACKEND] + config.EXTRA_BACKENDS))
 
     with progress.pipeline_bar(STAGES) as pbar:
@@ -339,6 +448,12 @@ def run():
         pair_ids = get_pair_ids(df)
         dist_vectors_by_backend = {}
         for backend in backends:
+            if backend == "dinov2":
+                grid_layers = embeddings.dinov2_grid_layers()
+                if grid_layers:
+                    progress.write(f"   [dinov2] grid search found -- using top {len(grid_layers)} configs: {list(grid_layers)}")
+                else:
+                    progress.write("   [dinov2] no grid search results found -- using single pooled embedding")
             embs = compute_all_embeddings(pair_ids, backend)
             dist_vectors = distances.build_dist_vectors(embs, pair_ids)
             suffix = "" if backend == config.BACKEND else f"_{backend}"
@@ -359,6 +474,7 @@ def run():
                 )
             _run_cross_condition_figures(condition_results, df, backend)
             results[backend] = condition_results
+        _run_integrated_figures(results, backends)
         pbar.update(1)
 
     with open(config.DATA_DIR / "analysis_results.pkl", "wb") as f:

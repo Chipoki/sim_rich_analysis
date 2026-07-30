@@ -29,11 +29,20 @@ everything to a **third**, sibling folder:
     │   ├── dist_vectors.pkl            # primary backend (config.BACKEND)
     │   ├── dist_vectors_dinov2.pkl     # one per config.EXTRA_BACKENDS entry
     │   ├── analysis_results.pkl
-    │   └── embeddings/<level>_<layer>.pkl
+    │   └── embeddings/
+    │       ├── resnet50/<level>_<layer>.pkl   # avgpool / layer4 / classifier
+    │       └── dinov2/<level>_<layer>.pkl     # pooled "dinov2" + grid-search blockNN_{cls,mean} configs
     └── diagrams/
-        ├── */*.png                    # primary backend's figures
-        └── dinov2/*/*.png             # same figure set, DinoV2 embeddings
+        ├── resnet50/*/*.png            # ResNet50-Places365 figures (config.BACKEND)
+        ├── dinov2/*/*.png              # same figure set, DinoV2 embeddings
+        ├── integrated/*.png            # cross-model comparisons (e.g. resnet50 vs dinov2)
+        └── experimental_blocks/letters_accuracy_by_block.png  # purely behavioral, generated once
 ```
+
+Every backend (config.BACKEND and each of config.EXTRA_BACKENDS) gets its own
+`data/embeddings/<name>/` and `diagrams/<name>/` sub-tree, named via
+`config.BACKEND_DIR_NAMES` (`resnet50_places365` -> `resnet50`,
+`dinov2` -> `dinov2`) -- no backend is special-cased to an unprefixed path.
 
 If your raw-data folder isn't literally named `src_data`, update
 `SRC_DATA_DIR` at the top of `config.py` — that's the only path you should
@@ -74,12 +83,15 @@ python run.py
 
 First run computes and caches embeddings for every stimulus level/layer
 (the slow part — CPU ResNet50 forward passes over ~400 images × 6 levels);
-every subsequent run reads straight from `web_analysis_results/data/embeddings/`
-and is fast. Delete a specific `<level>_<layer>.pkl` to force recomputation
-of just that one.
+every subsequent run reads straight from
+`web_analysis_results/data/embeddings/<backend name>/` (e.g. `resnet50/`,
+`dinov2/` — see `config.BACKEND_DIR_NAMES`) and is fast. Delete a specific
+`<level>_<layer>.pkl` under the relevant backend's sub-dir to force
+recomputation of just that one.
 
-Each analysis figure is displayed and saved to
-`web_analysis_results/diagrams/`.
+Each analysis figure is saved (not displayed interactively) to
+`web_analysis_results/diagrams/`, so a full run completes unattended without
+popping up GUI windows.
 
 ## 3. Design notes
 
@@ -117,12 +129,25 @@ Each analysis figure is displayed and saved to
   vector, desaturation, noise ceiling, blocks, cross-condition comparisons)
   a second time using DinoV2 embeddings instead of ResNet-Places50's,
   alongside (not instead of) the primary backend's figures -- see
-  `run.py`'s module docstring. Since DinoV2 exposes one pooled embedding
-  rather than 3 named layers, it's run through the same per-layer plumbing
-  as a size-1 "layers" dict keyed by the backend's own name
-  (`config.SINGLE_LAYER_BACKEND_LABELS` / `_COLORS`) -- the best-layer
-  figure is consequently a (harmless) best-of-1 for this backend. Set
-  `config.EXTRA_BACKENDS = []` to disable and only run `config.BACKEND`.
+  `run.py`'s module docstring. Every backend, `config.BACKEND` included,
+  gets its own `diagrams/<name>/` sub-tree (`config.BACKEND_DIR_NAMES`,
+  e.g. `resnet50/`, `dinov2/`) -- no backend is special-cased to an
+  unprefixed path. Set `config.EXTRA_BACKENDS = []` to disable and only run
+  `config.BACKEND`.
+
+  Each backend's own `degradation/` sub-tree also gets a
+  `letters_vs_no_letters_ratio_<layer>.png` line plot per examined layer,
+  alongside the existing `letters_vs_no_letters_<layer>.png` bar figure --
+  the *ratio* of mean correlation between adjacent degradation levels
+  (`Full:Deg05`, `Deg05:Deg3`, `Deg3:Tunnel`), one line per condition, rather
+  than each level's absolute value -- see `plotting.ratio_line_plot()`.
+
+  Cross-*model* comparisons (as opposed to the above, which is cross-
+  *condition* within one model) live under `diagrams/integrated/` instead of
+  any single backend's sub-tree, since they need more than one backend's
+  results at once -- currently just each model's best-layer correlation per
+  degradation level, `config.BACKEND` vs each of `config.EXTRA_BACKENDS`, one
+  figure per condition; see `run._run_integrated_figures()`.
 
   DinoV2's single pooled embedding (final-block CLS token) is one arbitrary
   choice among many possible depth/pooling combinations --
@@ -130,6 +155,19 @@ Each analysis figure is displayed and saved to
   of `run.py`) that grid-searches DINOv2's 12 transformer blocks x
   {cls, mean-pooled patch tokens} against human similarity judgments to find
   which combination correlates best; see its own README for details.
+
+  **`run.py` picks this up automatically.** If that grid search has already
+  been run (`config.DINOV2_GRID_SEARCH_RESULTS_PATH` exists), DinoV2's
+  "layers" in the main pipeline become the top `config.DINOV2_GRID_TOP_N`
+  (block, pooling) configs ranked by `avg_vector_r` in that file, instead of
+  the single size-1 `SINGLE_LAYER_BACKEND_LABELS`/`_COLORS` fallback -- so
+  the best-layer figure gets a genuine multi-config color spread for DinoV2
+  too, the same way it does for ResNet-Places50's 3 examined layers (see
+  `embeddings.dinov2_grid_layers()` / `run._layers_for_backend()`). Since the
+  grid search already computed and cached these configs' embeddings under
+  the same `data/embeddings/` cache the main pipeline reads from, this costs
+  nothing extra to run. Falls back to the single pooled embedding if the
+  grid search hasn't been run yet.
 
 - **Distances** (`distances.py`): cosine distance throughout. These CNN
   layers are ReLU-activated (non-negative), so cosine distance stays in

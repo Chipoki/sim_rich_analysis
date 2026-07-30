@@ -172,6 +172,16 @@ def patch_result_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DATA_DIR", data_dir)
     monkeypatch.setattr(config, "EMBEDDINGS_DIR", embeddings_dir)
     monkeypatch.setattr(config, "DIAGRAMS_DIR", diagrams_dir)
+    # Also redirect the DINOv2 grid-search results path so tests never pick
+    # up a real supplemental/dinov2_layer_grid_search/data/grid_results.pkl
+    # that happens to exist on the machine running the suite -- this path
+    # doesn't exist under tmp_path, so it deterministically exercises the
+    # "grid search not run yet" fallback unless a test explicitly writes one.
+    monkeypatch.setattr(
+        config,
+        "DINOV2_GRID_SEARCH_RESULTS_PATH",
+        results_dir / "supplemental" / "dinov2_layer_grid_search" / "data" / "grid_results.pkl",
+    )
     return results_dir
 
 
@@ -188,6 +198,7 @@ class StubExtractor(embeddings.EmbeddingExtractor):
     # 3 layers, plus each single-layer backend's own key (config.SINGLE_LAYER_BACKEND_LABELS) --
     # so this one stub works for extract_level() regardless of which backend is under test.
     LAYER_DIMS = {"avgpool": 8, "layer4": 16, "classifier": 4, "dinov2": 8}
+    BACKEND_KEY = "stub"
 
     def __init__(self):
         super().__init__()

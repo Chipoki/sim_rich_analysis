@@ -196,7 +196,7 @@ def test_bar_with_noise_ceiling_no_footnote_by_default(monkeypatch, patch_result
     plotting.plt.close(fig)
 
 
-def test_save_and_show_creates_category_subdirectory(patch_result_dirs):
+def test_save_creates_category_subdirectory(patch_result_dirs):
     plotting.bar_with_dots(_series_by_level(), "title", filename="degradation/nested.png")
 
     assert (config.DIAGRAMS_DIR / "degradation" / "nested.png").exists()
@@ -234,3 +234,51 @@ def test_scatter_relationship_handles_nan_and_mismatched_index(patch_result_dirs
     plotting.scatter_relationship(x, y, "title", xlabel="x", filename="individual_differences/nan_case.png")
 
     assert (config.DIAGRAMS_DIR / "individual_differences" / "nan_case.png").exists()
+
+
+def test_ratio_line_plot_saves_file(patch_result_dirs):
+    ratios = {"letters": [0.8, 1.1, 0.5], "no_letters": [0.9, 0.95, 0.6]}
+
+    plotting.ratio_line_plot(ratios, ["Full:Deg05", "Deg05:Deg3", "Deg3:Tunnel"], "title", filename="ratio.png")
+
+    assert (config.DIAGRAMS_DIR / "ratio.png").exists()
+
+
+def test_ratio_line_plot_no_file_written_without_filename(patch_result_dirs):
+    plotting.ratio_line_plot({"letters": [1.0]}, ["Full:Deg05"], "title", filename=None)
+
+    assert list(config.DIAGRAMS_DIR.iterdir()) == []
+
+
+def test_ratio_line_plot_default_reference_line_is_one(monkeypatch, patch_result_dirs):
+    _keep_figure_open(monkeypatch)
+
+    plotting.ratio_line_plot({"letters": [0.8, 1.2]}, ["Full:Deg05", "Deg05:Deg3"], "title", filename=None)
+
+    fig = plotting.plt.gcf()
+    labels = [t.get_text() for t in fig.axes[0].get_legend().get_texts()]
+    assert "no change (ratio = 1)" in labels
+    plotting.plt.close(fig)
+
+
+def test_ratio_line_plot_one_line_per_condition(monkeypatch, patch_result_dirs):
+    _keep_figure_open(monkeypatch)
+    ratios = {"letters": [0.8, 1.1], "no_letters": [0.9, 0.95]}
+
+    plotting.ratio_line_plot(ratios, ["Full:Deg05", "Deg05:Deg3"], "title", filename=None)
+
+    fig = plotting.plt.gcf()
+    labels = " ".join(t.get_text() for t in fig.axes[0].get_legend().get_texts())
+    assert "letters" in labels
+    assert "no_letters" in labels
+    plotting.plt.close(fig)
+
+
+def test_ratio_line_plot_handles_nan_ratio(patch_result_dirs):
+    """A ratio can be NaN/inf if its denominator level's underlying mean was
+    ~0 -- matplotlib must leave a gap there rather than raising."""
+    plotting.ratio_line_plot(
+        {"letters": [float("nan"), 1.2]}, ["Full:Deg05", "Deg05:Deg3"], "title", filename="nan_ratio.png"
+    )
+
+    assert (config.DIAGRAMS_DIR / "nan_ratio.png").exists()

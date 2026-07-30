@@ -45,9 +45,11 @@ the only path that should ever need editing. Full layout is documented in README
 ### Caching behavior
 
 First run is slow (CPU ResNet50 forward passes over ~400 images × 6 levels); embeddings are cached to
-`web_analysis_results/data/embeddings/<level>_<layer>.pkl` and every subsequent run reads from cache.
-Delete a specific `<level>_<layer>.pkl` to force recomputation of just that one. `sim_vectors.pkl`,
-`dist_vectors.pkl`, and `analysis_results.pkl` cache the other pipeline stages similarly.
+`web_analysis_results/data/embeddings/<backend name>/<level>_<layer>.pkl` (one sub-dir per backend, e.g.
+`resnet50/`, `dinov2/` — see `config.BACKEND_DIR_NAMES`) and every subsequent run reads from cache.
+Delete a specific `<level>_<layer>.pkl` under the relevant backend's sub-dir to force recomputation of
+just that one. `sim_vectors.pkl`, `dist_vectors.pkl`, and `analysis_results.pkl` cache the other pipeline
+stages similarly.
 
 ## Architecture
 
@@ -94,11 +96,18 @@ embeddings.py → distances.py         ↗
   self-report **not present in the raw JSON** — set `config.NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID`
   manually if known, else all N=20 are included.
 
-- **`plotting.py`** — bar + per-participant-dot figures (`bar_with_dots`, `bar_with_noise_ceiling`); every
-  figure is both displayed and saved to `web_analysis_results/diagrams/`.
+- **`plotting.py`** — bar + per-participant-dot figures (`bar_with_dots`, `bar_with_noise_ceiling`), cross-
+  participant scatter plots (`scatter_relationship`), and a condition line plot tracking a ratio metric
+  across level transitions (`ratio_line_plot`); every figure is saved to `web_analysis_results/diagrams/`
+  (never displayed interactively -- no `plt.show()` -- so a full run completes unattended without popping
+  up GUI windows).
 
 - **`run.py`** — thin end-to-end orchestration calling the above in order, for both conditions
-  (`letters`, `no_letters`), producing one figure per analysis in spec §4.
+  (`letters`, `no_letters`), producing one figure per analysis in spec §4. Every backend (`config.BACKEND`
+  and each of `config.EXTRA_BACKENDS`) gets its own `diagrams/<name>/` sub-tree (`config.BACKEND_DIR_NAMES`);
+  cross-model comparisons that need more than one backend's results at once (e.g. ResNet50-Places365 vs
+  DinoV2's best-layer correlation) live under `diagrams/integrated/` instead — see
+  `run._run_integrated_figures()`.
 
 - **`config.py`** — all paths, `LEVEL_FOLDERS` (degradation/desaturation level → stimulus subfolder name),
   `LAYERS`, `DEGRADATION_LEVELS` / `DESATURATION_LEVELS` groupings, exclusion thresholds, reliability/
@@ -187,7 +196,11 @@ embeddings.py → distances.py         ↗
     - treat every 6th message as the first prompt of a new logical session, while preserving all existing files and context.
     - Only then proceed to execute the 6th request under the same guardrails.
 
-9. Global priorities
+9. Git operations
+   - Never initiate any git operation (status, diff, add, commit, push, pull, branch, checkout, stash, reset, etc.) unless the user explicitly asks for it in the current request.
+   - Simply work on the currently checked-out branch, assuming no one else works on it at the same time — do not create branches, switch branches, or stash/restore state on your own initiative.
+
+10. Global priorities
     - Favor explicitness over guesswork.
     - Favor tight feedback loops over broad autonomous changes.
     - Favor fast smoke tests for frequent validation and reserve full end-to-end runs for explicit, high-value scenarios.

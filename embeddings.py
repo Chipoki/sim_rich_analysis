@@ -1,7 +1,7 @@
 """
 CPU-only image embedding extraction with on-disk caching.
 
-Two swappable backends behind one interface:
+Backends behind one interface:
   - ResNetPlacesExtractor (default): ResNet50 trained on Places365, using
     the local resnet50_places365.pth.tar weights. Exposes the 3 layers the
     original MATLAB analysis examined:
@@ -11,11 +11,20 @@ Two swappable backends behind one interface:
   - DinoV2Extractor: a single-layer (patch-averaged) embedding from a
     torch.hub DINOv2 backbone. Needs internet on first run to fetch
     pretrained weights.
+  - DinoV2GridExtractor: every transformer block x pooling combination from
+    the same DINOv2 backbone in one forward pass. Not used directly by
+    get_extractor() unless supplemental/dinov2_layer_grid_search has already
+    ranked configs (see dinov2_grid_layers() below) -- otherwise DinoV2Extractor's
+    single pooled embedding is used, unchanged.
 
 Caching: for a given (level, layer), embeddings for every image in that
 level's folder are cached to
-`<EMBEDDINGS_DIR>/<level>_<layer>.pkl` as {image_id: np.ndarray}, so
-re-running the pipeline is instant after the first pass.
+`<EMBEDDINGS_DIR>/<config.BACKEND_DIR_NAMES[BACKEND_KEY]>/<level>_<layer>.pkl`
+as {image_id: np.ndarray}, so re-running the pipeline is instant after the
+first pass. Each concrete extractor sets its own BACKEND_KEY (matching
+get_extractor()'s dispatch keys) so DinoV2Extractor and DinoV2GridExtractor
+-- both DINOv2-derived -- land in the same data/embeddings/dinov2/ sub-dir
+and can reuse each other's cache (see DinoV2GridExtractor's docstring).
 """
 
 import pickle
@@ -23,6 +32,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from PIL import Image
 
 import config
@@ -31,6 +41,8 @@ import progress
 
 class EmbeddingExtractor(ABC):
     """Shared batching/caching logic; subclasses provide model + layers."""
+
+    BACKEND_KEY: str  # subclasses must set -- namespaces the on-disk cache by model, see config.BACKEND_DIR_NAMES
 
     def __init__(self):
         self._model = None  # lazily loaded on first use, so instantiating
@@ -55,7 +67,8 @@ class EmbeddingExtractor(ABC):
 
         Returns {layer_name: {image_id: np.ndarray}}.
         """
-        cache_paths = {layer: config.EMBEDDINGS_DIR / f"{level}_{layer}.pkl" for layer in layers}
+        cache_dir = config.EMBEDDINGS_DIR / config.BACKEND_DIR_NAMES.get(self.BACKEND_KEY, self.BACKEND_KEY)
+        cache_paths = {layer: cache_dir / f"{level}_{layer}.pkl" for layer in layers}
         cached = {}
         missing_layers = []
         for layer, path in cache_paths.items():
@@ -113,6 +126,8 @@ class EmbeddingExtractor(ABC):
 class ResNetPlacesExtractor(EmbeddingExtractor):
     """ResNet50 trained on Places365, run on CPU."""
 
+    BACKEND_KEY = "resnet50_places365"
+
     def _load_model(self):
         import torch
         import torchvision
@@ -167,6 +182,8 @@ class DinoV2Extractor(EmbeddingExtractor):
     """Single-layer (patch-token-averaged) DINOv2 embedding. Needs internet
     on first run to download pretrained weights via torch.hub."""
 
+    BACKEND_KEY = "dinov2"
+
     def _load_model(self):
         import torch
 
@@ -194,9 +211,116 @@ class DinoV2Extractor(EmbeddingExtractor):
         return {"dinov2": feats.numpy()}
 
 
+class DinoV2GridExtractor(EmbeddingExtractor):
+    """DINOv2 embedding exposing every transformer block x pooling
+    combination (config.DINOV2_GRID_N_BLOCKS x config.DINOV2_GRID_POOLINGS),
+    computed in one forward pass, instead of only the final pooled CLS token
+    (DinoV2Extractor above). get_extractor() switches to this in place of
+    DinoV2Extractor whenever dinov2_grid_layers() finds the supplemental grid
+    search has already ranked configs -- extract_level's inherited
+    caching/batching already filters down to whichever layer subset the
+    caller requests, so this only ever computes the configs actually asked
+    for (and reuses the grid search's own cache if already populated)."""
+
+    BACKEND_KEY = "dinov2"  # same subdir as DinoV2Extractor -- same underlying model, shared cache
+
+    ALL_KEYS = [
+        f"block{i:02d}_{pooling}"
+        for i in range(1, config.DINOV2_GRID_N_BLOCKS + 1)
+        for pooling in config.DINOV2_GRID_POOLINGS
+    ]
+
+    def _load_model(self):
+        import torch
+
+        model = torch.hub.load("facebookresearch/dinov2", config.DINOV2_MODEL_NAME)
+        model.eval()
+        return model
+
+    def _preprocess(self, image: Image.Image):
+        import torchvision.transforms as T
+
+        transform = T.Compose([
+            T.Resize(config.IMAGE_RESIZE),
+            T.CenterCrop(config.IMAGE_CROP),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        return transform(image)
+
+    def _forward_batch(self, model, batch) -> dict[str, np.ndarray]:
+        import torch
+
+        with torch.no_grad():
+            x = torch.stack(batch, dim=0)
+            per_block = model.get_intermediate_layers(
+                x, n=list(range(config.DINOV2_GRID_N_BLOCKS)), return_class_token=True, norm=True
+            )
+
+        out = {}
+        for i, (patch_tokens, cls_token) in enumerate(per_block, start=1):
+            # cls_token is a non-contiguous view (out[:, 0]) into the full
+            # (B, N, C) per-block activation -- .numpy() on it would share
+            # that whole buffer, keeping all N patch tokens alive per stored
+            # image just to retrieve the 1 cls row. .contiguous() forces a
+            # real copy of just the (B, C) slice so the parent buffer can be
+            # freed.
+            out[f"block{i:02d}_cls"] = cls_token.contiguous().numpy()
+            out[f"block{i:02d}_mean"] = patch_tokens.mean(dim=1).numpy()
+        return out
+
+
+def dinov2_grid_layers(top_n: int = None) -> dict[str, str] | None:
+    """Top `top_n` (default config.DINOV2_GRID_TOP_N) DINOv2 (block, pooling)
+    configs from the supplemental grid search's dumped results
+    (config.DINOV2_GRID_SEARCH_RESULTS_PATH), ranked by avg_vector_r averaged
+    across every level/condition present in that file -- the same pooled
+    ranking supplemental/dinov2_layer_grid_search/reporting.py's
+    pooled_ranking() uses. Returns None if the grid search hasn't been run
+    yet (file missing) or has no grid rows, so callers fall back to the
+    single pooled "dinov2" embedding.
+
+    Return value: {config_key: human_label}, ordered best-first, e.g.
+    {"block11_cls": "Block11_Cls", "block12_mean": "Block12_Mean", ...} --
+    mirrors config.LAYERS' internal-key -> human-label shape so it can be
+    used as a drop-in "layers" dict wherever config.LAYERS is.
+    """
+    if top_n is None:
+        top_n = config.DINOV2_GRID_TOP_N
+
+    path = config.DINOV2_GRID_SEARCH_RESULTS_PATH
+    if not path.exists():
+        return None
+
+    grid_results = pd.read_pickle(path)
+    grid_only = grid_results[grid_results["block"].notna()]
+    if grid_only.empty:
+        return None
+
+    ranked = (
+        grid_only.groupby("config_key", as_index=False)["avg_vector_r"]
+        .mean()
+        .sort_values("avg_vector_r", ascending=False)
+        .head(top_n)
+    )
+    return {row.config_key: _dinov2_config_label(row.config_key) for row in ranked.itertuples()}
+
+
+def _dinov2_config_label(config_key: str) -> str:
+    """"block11_cls" -> "Block11_Cls" (Title_Case, matching config.LAYERS' style)."""
+    block, pooling = config_key.split("_")
+    return f"{block.capitalize()}_{pooling.capitalize()}"
+
+
+def dinov2_grid_layer_colors(layers: dict[str, str]) -> dict[str, str]:
+    """Assign config.DINOV2_GRID_TOP_N_COLORS to grid-selected configs, in
+    ranked order (the order `layers` -- from dinov2_grid_layers() -- iterates)."""
+    return dict(zip(layers, config.DINOV2_GRID_TOP_N_COLORS))
+
+
 def get_extractor(backend: str = config.BACKEND) -> EmbeddingExtractor:
     if backend == "resnet50_places365":
         return ResNetPlacesExtractor()
     if backend == "dinov2":
-        return DinoV2Extractor()
+        return DinoV2GridExtractor() if dinov2_grid_layers() is not None else DinoV2Extractor()
     raise ValueError(f"Unknown backend: {backend}")

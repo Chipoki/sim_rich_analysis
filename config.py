@@ -30,8 +30,13 @@ RESULTS_DIR = PROJECT_ROOT.parent / "web_analysis_results"
 DATA_DIR = RESULTS_DIR / "data"
 EMBEDDINGS_DIR = DATA_DIR / "embeddings"
 DIAGRAMS_DIR = RESULTS_DIR / "diagrams"
+# Cross-model comparison figures (e.g. ResNet50-Places365 vs DinoV2) -- the
+# only figures that need more than one backend's results at once -- live
+# here instead of under any single backend's own diagrams/<name>/ sub-tree.
+# See run._run_integrated_figures().
+INTEGRATED_DIAGRAMS_DIR = DIAGRAMS_DIR / "integrated"
 
-for _d in (RESULTS_DIR, DATA_DIR, EMBEDDINGS_DIR, DIAGRAMS_DIR):
+for _d in (RESULTS_DIR, DATA_DIR, EMBEDDINGS_DIR, DIAGRAMS_DIR, INTEGRATED_DIAGRAMS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # --------------------------------------------------------------------------
@@ -84,9 +89,19 @@ BACKEND = "resnet50_places365"  # or "dinov2"
 
 # Backends *additionally* run end-to-end (embeddings -> analysis -> the same
 # figure set produced for BACKEND) alongside the primary one, each writing
-# its own figures under a diagrams/<backend>/ sub-tree so they never
-# overwrite the primary backend's outputs.
+# its own figures under a diagrams/<backend dir name>/ sub-tree so they never
+# overwrite each other's outputs -- including BACKEND itself, which gets its
+# own sub-tree too (see BACKEND_DIR_NAMES below), not a special-cased
+# unprefixed path.
 EXTRA_BACKENDS = ["dinov2"]
+
+# Internal backend key -> short on-disk directory name, used to namespace
+# both diagrams/<name>/ (run.py) and data/embeddings/<name>/ (embeddings.py)
+# per model. Every backend in BACKEND/EXTRA_BACKENDS must have an entry here.
+BACKEND_DIR_NAMES = {
+    "resnet50_places365": "resnet50",
+    "dinov2": "dinov2",
+}
 
 RESNET_WEIGHTS_PATH = SRC_DATA_DIR / "resnet50_places365.pth.tar"
 RESNET_NUM_CLASSES = 365
@@ -120,6 +135,36 @@ DINOV2_MODEL_NAME = "dinov2_vits14"  # used only if BACKEND/EXTRA_BACKENDS inclu
 # key -> human label / hex color, mirroring LAYERS / LAYER_COLORS above.
 SINGLE_LAYER_BACKEND_LABELS = {"dinov2": "DinoV2"}
 SINGLE_LAYER_BACKEND_COLORS = {"dinov2": "#e7298a"}
+
+# --------------------------------------------------------------------------
+# DINOv2 grid-search integration (supplemental/dinov2_layer_grid_search)
+# --------------------------------------------------------------------------
+
+# Where run_grid_search.py dumps its scored (block x pooling) results. If
+# this file exists when the main pipeline runs "dinov2" as a backend
+# (config.BACKEND or config.EXTRA_BACKENDS), run.py/embeddings.py
+# automatically substitute the single pooled DINOv2 embedding for the top
+# DINOV2_GRID_TOP_N grid configs ranked by avg_vector_r -- see
+# embeddings.dinov2_grid_layers(). Falls back to the single pooled "dinov2"
+# embedding (SINGLE_LAYER_BACKEND_LABELS/COLORS above) if this file is
+# missing, i.e. the grid search hasn't been run yet.
+DINOV2_GRID_SEARCH_DIR = RESULTS_DIR / "supplemental" / "dinov2_layer_grid_search"
+DINOV2_GRID_SEARCH_DATA_DIR = DINOV2_GRID_SEARCH_DIR / "data"
+DINOV2_GRID_SEARCH_DIAGRAMS_DIR = DINOV2_GRID_SEARCH_DIR / "diagrams"
+DINOV2_GRID_SEARCH_RESULTS_PATH = DINOV2_GRID_SEARCH_DATA_DIR / "grid_results.pkl"
+
+DINOV2_GRID_N_BLOCKS = 12
+DINOV2_GRID_POOLINGS = ("cls", "mean")
+# Matches len(LAYERS), so the "best config" plot stays a 3-way color
+# comparison for dinov2 just like ResNet50's 3 examined layers.
+DINOV2_GRID_TOP_N = 3
+
+# Colorblind-safe palette (ColorBrewer Dark2, 8-class) assigned to
+# grid-selected configs in ranked order -- extends LAYER_COLORS' 3 colors in
+# case DINOV2_GRID_TOP_N is ever raised past 3.
+DINOV2_GRID_TOP_N_COLORS = [
+    "#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666",
+]
 
 # CPU-only batching -- kept small to stay well inside 16 GB RAM.
 BATCH_SIZE = 8

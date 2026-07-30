@@ -1,17 +1,19 @@
 """
 Bar + per-participant-dot figures, matching the PDF's style, plus cross-
-participant scatter relationships (individual-differences analyses). Every
-figure is displayed (plt.show()) and then saved to config.DIAGRAMS_DIR
-(filenames may include a category sub-directory, e.g. "degradation/foo.png").
+participant scatter relationships (individual-differences analyses) and
+condition line plots tracking a ratio metric across level transitions. Every
+figure is saved to config.DIAGRAMS_DIR (filenames may include a category
+sub-directory, e.g. "degradation/foo.png") -- never displayed interactively
+(no plt.show()), so a full run.py run completes unattended without popping
+up GUI windows.
 
 Every bar figure always shows: a numeric value label on each bar, a
 reference line (zero by default, overridable per call), the per-level
 sample size baked directly into its x-tick label, and a legend spelling out
 what a bar vs. a dot means. The legend is always placed *below* the axes
 (never inside the plotting area), and the figure is saved with
-bbox_inches="tight" (see _save_and_show), so the saved PNG -- the artifact
-actually reviewed -- never clips the legend regardless of how many entries
-it has.
+bbox_inches="tight" (see _save), so the saved PNG -- the artifact actually
+reviewed -- never clips the legend regardless of how many entries it has.
 """
 
 import matplotlib.pyplot as plt
@@ -27,13 +29,12 @@ _DEFAULT_REFERENCE_LINES: dict[float, str | None] = {0.0: None}
 _DEFAULT_CONDITION_COLORS = {"letters": "steelblue", "no_letters": "salmon"}
 
 
-def _save_and_show(fig, filename: str):
+def _save(fig, filename: str):
     """filename may include a category sub-directory (e.g. "degradation/foo.png");
     that sub-directory is created on demand."""
     path = config.DIAGRAMS_DIR / filename
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=config.FIGURE_DPI, bbox_inches="tight")
-    plt.show()
     plt.close(fig)
     print(f"saved: {path}")
 
@@ -143,9 +144,8 @@ def bar_with_dots(
     _legend_below(ax, legend_handles)
 
     if filename:
-        _save_and_show(fig, filename)
+        _save(fig, filename)
     else:
-        plt.show()
         plt.close(fig)
 
 
@@ -221,9 +221,8 @@ def bar_with_noise_ceiling(
         ax.text(0.5, -0.38, footnote, transform=ax.transAxes, ha="center", fontsize=7, style="italic", wrap=True)
 
     if filename:
-        _save_and_show(fig, filename)
+        _save(fig, filename)
     else:
-        plt.show()
         plt.close(fig)
 
 
@@ -277,7 +276,56 @@ def scatter_relationship(
     _legend_below(ax, legend_handles)
 
     if filename:
-        _save_and_show(fig, filename)
+        _save(fig, filename)
     else:
-        plt.show()
+        plt.close(fig)
+
+
+_DEFAULT_RATIO_REFERENCE_LINES: dict[float, str | None] = {1.0: "no change (ratio = 1)"}
+
+
+def ratio_line_plot(
+    ratios_by_condition: dict[str, list[float]],
+    transition_labels: list[str],
+    title: str,
+    ylabel: str = "Correlation ratio: r(later level) / r(earlier level)",
+    xlabel: str = "Degradation transition",
+    condition_colors: dict[str, str] | None = None,
+    reference_lines: dict[float, str | None] | None = None,
+    filename: str | None = None,
+):
+    """
+    One line per condition, tracking a ratio metric across a sequence of
+    adjacent-level transitions (e.g. "Full:Deg05", "Deg05:Deg3",
+    "Deg3:Tunnel") -- a companion view to the per-level bar figures, showing
+    how correlation changes relative to the *previous* level rather than each
+    level's absolute value. Direction: ratio_i = value(transition_labels[i]'s
+    later level) / value(its earlier level), so ratio < 1 means correlation
+    dropped moving to the more-degraded level.
+
+    ratios_by_condition: {condition: [ratio_per_transition, ...]}, each list
+    the same length/order as transition_labels. A ratio may be NaN/inf if its
+    denominator level's underlying value was ~0 -- matplotlib simply leaves a
+    gap at that point rather than raising.
+    """
+    condition_colors = condition_colors or _DEFAULT_CONDITION_COLORS
+    reference_lines = _DEFAULT_RATIO_REFERENCE_LINES if reference_lines is None else reference_lines
+
+    fig, ax = plt.subplots(figsize=(1.6 * len(transition_labels) + 2, 4.8))
+    legend_handles = []
+    for condition, ratios in ratios_by_condition.items():
+        color = condition_colors.get(condition, "black")
+        ax.plot(transition_labels, ratios, marker="o", color=color, linewidth=1.8, markersize=6, zorder=3)
+        legend_handles.append(Line2D([0], [0], marker="o", color=color, label=condition))
+
+    legend_handles.extend(_draw_reference_lines(ax, reference_lines))
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    _legend_below(ax, legend_handles)
+
+    if filename:
+        _save(fig, filename)
+    else:
         plt.close(fig)

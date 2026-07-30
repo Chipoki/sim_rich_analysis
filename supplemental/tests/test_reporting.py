@@ -5,8 +5,8 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless: savefig must never require a display
 
-# See test_extractor.py's comment: no shared conftest.py in this dir to avoid
-# colliding with tests/conftest.py's bare "conftest" module name.
+# No shared conftest.py in this dir, to avoid colliding with
+# tests/conftest.py's bare "conftest" module name.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dinov2_layer_grid_search"))
 

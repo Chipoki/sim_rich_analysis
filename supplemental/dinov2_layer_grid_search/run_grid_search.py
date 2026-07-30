@@ -2,20 +2,23 @@
 Grid search over DINOv2 (block x pooling) embedding-extraction strategies,
 scored by correlation against human peripheral-similarity judgments.
 
-Standalone supplemental script -- not part of run.py's main pipeline. Reuses
-the main pipeline's parsing/sim_vectors/distances/analysis modules exactly as
-run.py does, feeding them a much larger set of "layers" (24 DINOv2 block x
-pooling combinations, computed in one forward pass per image via
-DinoV2GridExtractor, plus 2 baseline configs for comparison: the existing
-resnet50_places365 avgpool and dinov2 defaults already produced by run.py).
+Standalone supplemental script -- not part of run.py's main pipeline, though
+run.py's own dinov2 backend automatically picks up this script's dumped
+results once they exist (see embeddings.dinov2_grid_layers()). Reuses the
+main pipeline's parsing/sim_vectors/distances/analysis/embeddings modules
+exactly as run.py does, feeding them a much larger set of "layers" (24 DINOv2
+block x pooling combinations, computed in one forward pass per image via
+embeddings.DinoV2GridExtractor, plus 2 baseline configs for comparison: the
+existing resnet50_places365 avgpool and dinov2 defaults already produced by
+run.py).
 
 Run with:  python supplemental/dinov2_layer_grid_search/run_grid_search.py
 
 Outputs (correlation tables, markdown summary, heatmap figures) are written
 to a sibling-of-the-repo results tree, matching the main pipeline's
 convention of never writing generated output inside the repo itself:
-  <config.RESULTS_DIR>/supplemental/dinov2_layer_grid_search/data/
-  <config.RESULTS_DIR>/supplemental/dinov2_layer_grid_search/diagrams/
+  <config.DINOV2_GRID_SEARCH_DATA_DIR>
+  <config.DINOV2_GRID_SEARCH_DIAGRAMS_DIR>
 
 Needs internet on first run to fetch DINOv2 weights via torch.hub (same
 requirement as running the main pipeline with "dinov2" in
@@ -35,21 +38,24 @@ import distances  # noqa: E402
 import embeddings  # noqa: E402
 import parsing  # noqa: E402
 import sim_vectors  # noqa: E402
+from embeddings import DinoV2GridExtractor  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import reporting  # noqa: E402
-from extractor import DinoV2GridExtractor  # noqa: E402
 
 BASELINE_KEYS = ["resnet50_places365_avgpool", "dinov2_default"]
-OUT_DIR = config.RESULTS_DIR / "supplemental" / "dinov2_layer_grid_search"
-DATA_DIR = OUT_DIR / "data"
-DIAGRAMS_DIR = OUT_DIR / "diagrams"
+DATA_DIR = config.DINOV2_GRID_SEARCH_DATA_DIR
+DIAGRAMS_DIR = config.DINOV2_GRID_SEARCH_DIAGRAMS_DIR
 
 
 def compute_all_embeddings(pair_ids: list[str]) -> dict[tuple[str, str], dict]:
     grid_extractor = DinoV2GridExtractor()
     resnet_extractor = embeddings.get_extractor("resnet50_places365")
-    dinov2_extractor = embeddings.get_extractor("dinov2")
+    # Not embeddings.get_extractor("dinov2") -- that dispatch is grid-results-
+    # aware (see embeddings.get_extractor) and would return DinoV2GridExtractor
+    # instead once this very script's own grid_results.pkl exists, breaking
+    # the "dinov2_default" baseline this loop is trying to compute.
+    dinov2_extractor = embeddings.DinoV2Extractor()
 
     out = {}
     for level in config.ALL_LEVELS:

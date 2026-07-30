@@ -37,8 +37,19 @@ python supplemental/dinov2_layer_grid_search/run_grid_search.py
 Needs internet on first run (DINOv2 weights via `torch.hub`, same requirement
 as running the main pipeline with `"dinov2"` in `config.EXTRA_BACKENDS`) and
 real `src_data/` stimuli on disk. Embeddings are cached through the same
-`EmbeddingExtractor.extract_level` mechanism `embeddings.py` uses, so re-runs
-after the first are fast.
+`EmbeddingExtractor.extract_level` mechanism `embeddings.py` uses -- under
+`data/embeddings/dinov2/` (same sub-dir the main pipeline's own `dinov2`
+backend reads/writes, see `config.BACKEND_DIR_NAMES`) -- so re-runs after the
+first are fast, and so is the main pipeline the first time it runs after this
+script has (see below).
+
+**The main pipeline picks up this script's results automatically.** Once
+`data/grid_results.pkl` (below) exists, `run.py`'s `"dinov2"` backend
+substitutes the single default pooled embedding for the top
+`config.DINOV2_GRID_TOP_N` (block, pooling) configs ranked by `avg_vector_r`
+in that file -- see `embeddings.dinov2_grid_layers()` and
+`run._layers_for_backend()`. No config change needed; delete or move
+`grid_results.pkl` to fall back to the single pooled embedding again.
 
 ## Outputs
 
@@ -59,11 +70,14 @@ diagrams/
 
 ## Files
 
-- `extractor.py` -- `DinoV2GridExtractor`, the 24-key embedding extractor.
 - `reporting.py` -- scoring (`score_configs`, `best_config_per_participant`),
   ranking (`pooled_ranking`, `top_configs`, `most_preferred_configs`), and
   plotting (`plot_heatmaps`) helpers. Kept separate from `run_grid_search.py`
   so this logic is unit-testable against small hand-built tables
   (`supplemental/tests/test_reporting.py`) without any real embeddings.
 - `run_grid_search.py` -- orchestration; reuses `parsing`/`sim_vectors`/
-  `distances`/`analysis` exactly as `run.py` does.
+  `distances`/`analysis`/`embeddings` exactly as `run.py` does.
+  `DinoV2GridExtractor` (the 24-key embedding extractor) itself lives in the
+  main pipeline's `embeddings.py`, not here, alongside `ResNetPlacesExtractor`
+  / `DinoV2Extractor` -- this script imports it from there, rather than the
+  main pipeline reaching into `supplemental/` for it.
