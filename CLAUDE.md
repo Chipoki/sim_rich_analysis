@@ -123,12 +123,12 @@ embeddings.py → distances.py         ↗
   currently points at the white-background JPG variant instead.
 
 ## AI Coding Guardrails
+
 1. General behavior
    - Act as a disciplined, context-aware AI pair programmer, not an autonomous refactorer.
    - Treat the existing codebase and documentation as the source of truth, and optimize for diffs that a human reviewer can fully understand and trust.
 
 2. Working in an existing codebase
-
    - Surgical changes only: Edit exactly what is necessary to satisfy the current request. Do not refactor, rename, reformat, or “improve” unrelated code, comments, or structure unless explicitly asked.
    - Reuse before adding: Prefer using existing functions, classes, modules, patterns, and conventions. Introduce new abstractions only when clearly required for a robust, maintainable solution.
    - Respect project style: Match the current naming, error handling, logging, and architectural patterns. Avoid introducing conflicting paradigms.
@@ -142,25 +142,20 @@ embeddings.py → distances.py         ↗
    - Documentation discipline: Keep README and other docs concise and task-focused. Explain what future developers need to know to safely extend, debug, or integrate, not every detail.
 
 4. Testing and correctness
-
    - Correctness first: Always prioritize correctness, safety, and reproducibility over speed of delivery or cleverness.
    - Test behavior, not implementation: When adding or changing behavior, write or extend tests that cover observable behavior and important edge cases, rather than internal implementation details.
    - Always add/extend tests for new behavior:
      - For every new feature, bug fix, or non-trivial refactor, add new tests or extend existing ones to cover the change.
      - Prefer small, focused tests that clearly express the expected behavior and guard against regression.
-
    - Performance-heavy and pipeline-style code
        - Smoke tests instead of full runs by default: For performance-heavy code (e.g., long-running pipelines, large fMRI/ML jobs, full-model training loops, large ETL), prefer smoke tests and lightweight integration tests over full end-to-end runs on every change.
        - Design smoke tests to be fast and representative:
            - Use small, representative datasets, synthetic data, or reduced configurations that approximate real-world structure without full cost.
            - Aim for tests that verify “does this run end-to-end without crashing, with sane outputs and resource usage?” rather than full metric-level validation.
-
        - Bounded expectations:
            - For stochastic or retrained models, assert that outputs fall within reasonable bounds (e.g., ranges, shapes, basic invariants) rather than exact values.
            - Avoid tests that require full convergence, full training epochs, or production-scale throughput unless explicitly requested.
-
        - Full end-to-end tests as special cases:
-
            - Reserve full end-to-end runs (large datasets, full training, full pipeline execution) for explicitly labeled scenarios (e.g., release gating, performance benchmarking, or dedicated CI jobs), not for routine local changes.
            - When proposing such tests, clearly mark them as “expensive” and, if possible, provide a cheaper smoke-test variant that can be run more frequently.
 
@@ -181,22 +176,18 @@ embeddings.py → distances.py         ↗
         - Retrospective: In hindsight, the root cause of any issue plus the final solution and any reusable lessons or patterns learned.
 
 7. Log hygiene and summarization
-
     - High-signal overview: Treat project_legacy_log as an accumulated overview of technical and conceptual evolution—not a scratchpad.
     - Collapse solved noise: When an issue is solved after a long debugging or exploratory process, replace verbose, step-by-step notes with a short, high-value summary that a future reader can understand in under a minute.
     - Avoid duplication: Do not repeat the same information across multiple entries; reference prior entries when needed.
     - Keep entries skimmable: Use short paragraphs or bullets; avoid long narrative blocks.
 
 8. Session message rule
-
     - Message counting: Count only user messages in the current conversation (exclude assistant replies).
-    - On the 6th user message:
-        - Before executing the request, update project_legacy_log with a session-level summary of the first five messages: what was covered, what changed, and outstanding questions or TODOs.
-        - After updating the log, treat the 6th message as the first prompt of a new logical session, while preserving all existing files and context.
-        - Only then proceed to execute the 6th request under the same guardrails.
+    - On every third message: Before executing the request, update project_legacy_log with a session-level summary of all the new messages that have been added: what was covered, what changed, and outstanding questions or TODOs.
+    - treat every 6th message as the first prompt of a new logical session, while preserving all existing files and context.
+    - Only then proceed to execute the 6th request under the same guardrails.
 
 9. Global priorities
-
     - Favor explicitness over guesswork.
     - Favor tight feedback loops over broad autonomous changes.
     - Favor fast smoke tests for frequent validation and reserve full end-to-end runs for explicit, high-value scenarios.
