@@ -1,0 +1,20 @@
+# Machine-local settings -- holds a participant identifier. Never commit.
+local_config.py
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Claude Code local state (permissions, worktrees, session log)
+.claude/
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
