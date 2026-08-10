@@ -312,9 +312,48 @@ def _dinov2_config_label(config_key: str) -> str:
     return f"{block.capitalize()}_{pooling.capitalize()}"
 
 
+def dinov2_pinned_layers() -> dict[str, str] | None:
+    """The a-priori config.DINOV2_PINNED_CONFIGS as a {config_key: label}
+    dict, or None if pinning is switched off (empty tuple).
+
+    Same {key: label} shape as config.LAYERS / dinov2_grid_layers(), so it
+    drops straight into the same plumbing. Raises on an unknown key rather
+    than silently yielding a config the extractor cannot compute.
+    """
+    pinned = tuple(config.DINOV2_PINNED_CONFIGS)
+    if not pinned:
+        return None
+
+    unknown = [key for key in pinned if key not in DinoV2GridExtractor.ALL_KEYS]
+    if unknown:
+        raise ValueError(
+            f"config.DINOV2_PINNED_CONFIGS contains unknown config key(s): {unknown}. "
+            f"Expected block01..block{config.DINOV2_GRID_N_BLOCKS:02d} x {tuple(config.DINOV2_GRID_POOLINGS)}."
+        )
+    if config.DINOV2_PINNED_DEFAULT_CONFIG not in pinned:
+        raise ValueError(
+            f"config.DINOV2_PINNED_DEFAULT_CONFIG={config.DINOV2_PINNED_DEFAULT_CONFIG!r} "
+            f"is not one of config.DINOV2_PINNED_CONFIGS {pinned}."
+        )
+    return {key: _dinov2_config_label(key) for key in pinned}
+
+
+def dinov2_layers() -> dict[str, str] | None:
+    """Which DINOv2 configs the main pipeline reports, resolved in priority
+    order: the a-priori pinned set, else the supplemental grid search's
+    ranking, else None (caller falls back to the single pooled embedding).
+
+    The one chokepoint -- run.py and get_extractor() both go through it, so
+    switching config.DINOV2_PINNED_CONFIGS on or off moves every figure,
+    label and cache lookup together.
+    """
+    return dinov2_pinned_layers() or dinov2_grid_layers()
+
+
 def dinov2_grid_layer_colors(layers: dict[str, str]) -> dict[str, str]:
-    """Assign config.DINOV2_GRID_TOP_N_COLORS to grid-selected configs, in
-    ranked order (the order `layers` -- from dinov2_grid_layers() -- iterates)."""
+    """Assign config.DINOV2_GRID_TOP_N_COLORS to the active dinov2 configs, in
+    the order `layers` (from dinov2_layers()) iterates -- ranked order for a
+    grid result, config.DINOV2_PINNED_CONFIGS order when pinned."""
     return dict(zip(layers, config.DINOV2_GRID_TOP_N_COLORS))
 
 
@@ -322,5 +361,5 @@ def get_extractor(backend: str = config.BACKEND) -> EmbeddingExtractor:
     if backend == "resnet50_places365":
         return ResNetPlacesExtractor()
     if backend == "dinov2":
-        return DinoV2GridExtractor() if dinov2_grid_layers() is not None else DinoV2Extractor()
+        return DinoV2GridExtractor() if dinov2_layers() is not None else DinoV2Extractor()
     raise ValueError(f"Unknown backend: {backend}")

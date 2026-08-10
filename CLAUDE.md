@@ -13,7 +13,7 @@ data (Letters & No-Letters conditions). It correlates human pairwise similarity 
 
 ```bash
 conda env create -f environment.yml
-conda activate web-analysis
+conda activate sim_rich_analysis_env
 python run.py
 ```
 
@@ -82,6 +82,17 @@ embeddings.py → distances.py         ↗
   forward pass via a forward hook on `layer4`. Handles its own batching (`config.BATCH_SIZE`) and per-
   `(level, layer)` disk caching; the model is lazily loaded so instantiating an extractor never touches torch.
 
+  **Which DinoV2 configs are active is decided by `embeddings.dinov2_layers()` — the single chokepoint**
+  (`run.py`'s three `_*_for_backend` helpers and `get_extractor` all route through it). Priority:
+  `config.DINOV2_PINNED_CONFIGS` (an a-priori set — blocks 4/8/12 × {cls, mean} — shipped as the default),
+  else the supplemental grid search's ranking, else the single pooled embedding. Pinning exists to keep the
+  reported configs from being selected on the very ratings the pipeline reports; don't reintroduce
+  grid-driven selection into `run.py` without saying so in the write-up. Two traps: (1)
+  `_default_layer_for_backend` must return `config.DINOV2_PINNED_DEFAULT_CONFIG` when pinned, **not**
+  `next(iter(...))` — the pinned tuple is depth-ordered, so its first entry is the shallowest block;
+  (2) `tests/conftest.py`'s `StubExtractor.LAYER_DIMS` derives from `DINOV2_PINNED_CONFIGS`, so adding a
+  pinned config that the stub can't produce breaks the end-to-end smoke test rather than any unit test.
+
 - **`distances.py`** — per-image embeddings → per-pair cosine distance/similarity vectors, aligned 1:1
   with the human vectors by `pair_id`. Cosine distance is used throughout because these layers are
   ReLU-activated (non-negative), keeping distance in `[0, 1]` so `similarity = 1 - distance` is a valid
@@ -92,9 +103,13 @@ embeddings.py → distances.py         ↗
   corrected), leave-one-out reliability (doubles as both the headline `R_LOO` stat and the noise ceiling
   plotted alongside model bars), and paired Wilcoxon tests between adjacent degradation levels.
   `get_excluded_participants()` computes the Letters exclusion automatically from
-  `letter_discrimination_correct` accuracy (< `LETTER_ACCURACY_THRESHOLD`); the No-Letters exclusion is a
-  self-report **not present in the raw JSON** — set `config.NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID`
-  manually if known, else all N=20 are included.
+  `letter_discrimination_correct` accuracy (< `LETTER_ACCURACY_THRESHOLD`), applied **downstream** so that
+  participant still reaches the tidy DataFrame — one figure plots them deliberately, to justify the
+  threshold. The No-Letters exclusion instead names a single id
+  (`config.NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID`) and is applied at **acquisition**, in
+  `parsing.excluded_participant_ids()`. So for No-Letters this function is a *reporting* no-op: the id is
+  already gone from the data, and it stays in the returned set only so `run.py`'s `"2. Exclusions: ..."`
+  line still names who was dropped. Don't "fix" that redundancy by removing it.
 
 - **`plotting.py`** — bar + per-participant-dot figures (`bar_with_dots`, `bar_with_noise_ceiling`), cross-
   participant scatter plots (`scatter_relationship`), and a condition line plot tracking a ratio metric
@@ -125,9 +140,10 @@ embeddings.py → distances.py         ↗
   best-effort reading. Raw-data folders contain precomputed `<Layer>_embeddings.csv` under each stimulus
   folder's `ResNet_places/` for cross-checking dimensionality if the layer definitions are ever suspect —
   this pipeline never reads those CSVs itself, it recomputes embeddings fresh.
-- Computed reliability (`R_LOO` ≈ 0.39 Letters / 0.73 No-Letters) is in the right ballpark vs. the PDF's
-  ≈0.44 / ≈0.78 but not exact, plausibly due to the unresolved No-Letters manual exclusion and this being a
-  different (web) data collection than the original PDF.
+- Computed reliability (`R_LOO` ≈ 0.39 Letters / 0.76 No-Letters) is in the right ballpark vs. the PDF's
+  ≈0.44 / ≈0.78. The No-Letters figure was 0.73 while that condition was still analyzed at N=20; resolving
+  its exclusion (the participant whose own LOO r was 0.06 against a next-lowest 0.57) moved it
+  to 0.76. The residual gap is attributable to this being a different (web) data collection than the PDF's.
 - A PNG variant of the tunnel condition exists on disk (`NavehVer_Tunnel_PNG`); `LEVEL_FOLDERS["Tunnel"]`
   currently points at the white-background JPG variant instead.
 
@@ -173,26 +189,37 @@ embeddings.py → distances.py         ↗
     - Expose tradeoffs: When there are meaningful tradeoffs (speed vs. memory, readability vs. abstraction, smoke vs. full end-to-end testing), briefly state them and choose the option that best matches the existing project philosophy.
     - Diff-optimized changes: Assume your work will be reviewed as diffs. Aim for small, coherent commits with clear intent and no hidden behavior changes.
 
-6. Project legacy log
-    - Location: Maintain a persistent history of our collaboration in ./.claude/project_legacy_log.
+6. Session legacy node (Obsidian)
+    - Location: The persistent history of our collaboration lives in the knowledge vault, **not in this repo**:
+      `~/Documents/obsidian_knowledge/95 AI Session Legacy/MSc Research/Sim-Rich Analysis.md`.
+      Corpus index: `95 AI Session Legacy/_Legacy MOC.md`. Full corpus rules: `~/.claude/CLAUDE.md` §6–§7.
+      Sibling node: `MSc Research/Sim-Rich Experiment.md` (the experiment-side repo) — read it too when a
+      change spans both.
     - Session start behavior: At the start of each new session:
-        - Read the log to recover context.
+        - Read the node to recover context.
         - Use it to understand past decisions, known pitfalls, and existing patterns before proposing changes.
-    - Log entry structure: For each meaningful increment, append a concise entry that includes:
+        - The node does not exist yet. Create it on the first logged session — frontmatter, a one-paragraph
+          "what this project is", a link back to `[[_Legacy MOC]]` — and register it in the MOC before doing
+          any other work.
+    - Log entry structure: For each meaningful increment, append a concise entry under a
+      `## Session N — <name>` heading (newest at the bottom) that includes:
         - Request: What was asked.
         - Changes: Files, functions, interfaces, tests, and docs that were modified or added.
         - Trials and errors: Any significant dead ends, surprising behavior, or debugging paths.
         - Retrospective: In hindsight, the root cause of any issue plus the final solution and any reusable lessons or patterns learned.
+    - Keep the node's `updated:` frontmatter field current on every write.
+    - Retired: `./.claude/project_legacy_log`. Never write project history into this repo.
 
-7. Log hygiene and summarization
-    - High-signal overview: Treat project_legacy_log as an accumulated overview of technical and conceptual evolution—not a scratchpad.
+7. Log hygiene and corpus curation
+    - High-signal overview: Treat the node as an accumulated overview of technical and conceptual evolution—not a scratchpad.
     - Collapse solved noise: When an issue is solved after a long debugging or exploratory process, replace verbose, step-by-step notes with a short, high-value summary that a future reader can understand in under a minute.
-    - Avoid duplication: Do not repeat the same information across multiple entries; reference prior entries when needed.
+    - Avoid duplication: Do not repeat the same information across multiple entries; reference prior sessions with an Obsidian heading link (`[[Sim-Rich Analysis#Session 1 — …]]`) instead of restating them.
     - Keep entries skimmable: Use short paragraphs or bullets; avoid long narrative blocks.
+    - Curate the tree: Whenever a node is added anywhere in `95 AI Session Legacy/`, re-examine the whole corpus and re-arrange it if it is no longer the crispest division of the material — merge stray sub-categories, split heterogeneous ones, rename any that no longer describe their contents, and name sessions for what they accomplished. Update `_Legacy MOC.md` to match.
 
 8. Session message rule
     - Message counting: Count only user messages in the current conversation (exclude assistant replies).
-    - On every third message: Before executing the request, update project_legacy_log with a session-level summary of all the new messages that have been added: what was covered, what changed, and outstanding questions or TODOs.
+    - On every third message: Before executing the request, update the legacy node with a session-level summary of all the new messages that have been added: what was covered, what changed, and outstanding questions or TODOs.
     - treat every 6th message as the first prompt of a new logical session, while preserving all existing files and context.
     - Only then proceed to execute the 6th request under the same guardrails.
 
@@ -204,4 +231,4 @@ embeddings.py → distances.py         ↗
     - Favor explicitness over guesswork.
     - Favor tight feedback loops over broad autonomous changes.
     - Favor fast smoke tests for frequent validation and reserve full end-to-end runs for explicit, high-value scenarios.
-    - Favor code and tests that a careful human reviewer would trust after reading only the diffs, the tests, and project_legacy_log.
+    - Favor code and tests that a careful human reviewer would trust after reading only the diffs, the tests, and the legacy node.

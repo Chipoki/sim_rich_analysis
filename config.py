@@ -9,6 +9,7 @@ sits as a *sibling* of your raw-data folder. If your raw-data folder isn't
 named "web_analysis_src_data", change SRC_DATA_DIR accordingly.
 """
 
+import warnings
 from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -159,6 +160,42 @@ DINOV2_GRID_POOLINGS = ("cls", "mean")
 # comparison for dinov2 just like ResNet50's 3 examined layers.
 DINOV2_GRID_TOP_N = 3
 
+# --------------------------------------------------------------------------
+# DINOv2 a-priori configs (take precedence over the grid search above)
+# --------------------------------------------------------------------------
+
+# Which DINOv2 (block x pooling) configs the *main* pipeline reports. When
+# this is non-empty it overrides the grid search entirely -- run.py and
+# embeddings.get_extractor() use exactly these, and grid_results.pkl is not
+# consulted at all.
+#
+# Why pin instead of grid-search: the grid ranks 24 configs by their
+# correlation with the very human ratings the pipeline then reports, so
+# whichever configs win are selected on the evaluation data and their
+# reported r is optimistically biased. Choosing a fixed, theory-driven set up
+# front removes that selection step, so DINOv2's numbers mean the same thing
+# ResNet50's do (config.LAYERS is likewise fixed, never data-selected).
+#
+# The set: three depths spaced evenly across the 12-block ViT-S (early /
+# middle / final third), each read out both ways DINOv2 is normally used --
+# the CLS token and mean-pooled patch tokens. Depth and pooling are crossed
+# so the two factors stay separable when reading the figures.
+#
+# Set to () to fall back to the grid search (see DINOV2_GRID_SEARCH_* above).
+DINOV2_PINNED_CONFIGS = (
+    "block04_cls", "block04_mean",
+    "block08_cls", "block08_mean",
+    "block12_cls", "block12_mean",
+)
+
+# The single config standing in for DINOv2 wherever one representative layer
+# is plotted (figure titles' "layer: ...", the by-block breakdown) -- the
+# analogue of DEFAULT_LAYER for resnet50_places365. Final-block CLS, i.e.
+# what DinoV2Extractor returns on its own, rather than DINOV2_PINNED_CONFIGS'
+# first entry, which is the *shallowest* config and a poor stand-in for the
+# model. Must be one of DINOV2_PINNED_CONFIGS.
+DINOV2_PINNED_DEFAULT_CONFIG = "block12_cls"
+
 # Colorblind-safe palette (ColorBrewer Dark2, 8-class) assigned to
 # grid-selected configs in ranked order -- extends LAYER_COLORS' 3 colors in
 # case DINOV2_GRID_TOP_N is ever raised past 3.
@@ -190,10 +227,42 @@ DISTANCE_METRIC = "cosine"
 LETTER_ACCURACY_THRESHOLD = 0.80
 
 # No-Letters: the PDF's exclusion ("single participant claimed technical
-# problems") is a self-report with no corresponding field in the JSON, so
-# it can't be recovered from the data alone. Fill in the participant_id
-# below if you know which one it was; leave as None to analyze all N=20.
-NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID = None
+# problems") is a self-report with no corresponding field in the JSON, so it
+# can't be read off the data directly -- but it *was* recovered from the raw
+# file's presentation telemetry. This participant is the only one of the 20
+# with any missing frame-timing block at all: 165 of its 212 stimulus trials
+# logged no measured_frame_time_ms / measured_refresh_rate_hz / *_actual_ms
+# (every other participant logged 212/212), including one whole 40-trial
+# block, and the 47 trials that did log dipped to 22.2 Hz against its own
+# steady 60 Hz baseline. Stimuli were still displayed -- the presentation
+# sequence ran its full ~1689 ms, same as everyone else -- so this is a
+# logging failure rather than a blank screen; what makes it an exclusion
+# rather than merely unverified data is that the untimed trials also drew
+# ~2-3x faster ratings than the timed ones *within the same trial bins*
+# (456 vs 1300 ms overall), so they aren't behaviorally interchangeable.
+#
+# Unlike LETTER_ACCURACY_THRESHOLD above -- a rule the data is scored against
+# -- this is a single named id, so it is applied at *acquisition*
+# (parsing.parse_file) and the participant never enters the tidy DataFrame.
+# Set to None to analyze all N=20.
+#
+# The id is a Prolific participant identifier, and naming it here alongside
+# "this person's data was unusable" is participant-level information, so it is
+# kept out of version control: it lives in an untracked local_config.py (see
+# local_config.example.py, and .gitignore). Without that file the exclusion
+# cannot be applied and the condition would silently revert to N=20 -- hence
+# the warning rather than a quiet None.
+try:
+    from local_config import NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID
+except ImportError:
+    NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID = None
+    warnings.warn(
+        "local_config.py not found -- the No-Letters technical-problems "
+        "exclusion will NOT be applied, so that condition is analyzed at N=20 "
+        "rather than the reported N=19. Copy local_config.example.py to "
+        "local_config.py and fill in the id to restore it.",
+        stacklevel=2,
+    )
 
 # --------------------------------------------------------------------------
 # Reliability analyses

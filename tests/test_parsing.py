@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 
+import config
 import parsing
 from conftest import make_participant_trials
 
@@ -144,3 +145,44 @@ def test_load_all_merges_conditions_and_casts_dtype(write_result_file, pair_ids)
     assert str(df["letter_discrimination_correct"].dtype) == "boolean"
     no_letters_rows = df[df["condition"] == "no_letters"]
     assert no_letters_rows["letter_discrimination_correct"].isna().all()
+
+
+def test_configured_participant_is_dropped_at_acquisition(write_result_file, pair_ids, monkeypatch):
+    """The No-Letters technical-problems exclusion must happen here, not
+    downstream: the participant never reaches the tidy DataFrame at all, so
+    no derived quantity can reintroduce them."""
+    monkeypatch.setattr(config, "NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID", "n_bad")
+    path = write_result_file(
+        "no_letters.txt",
+        "no_letters",
+        [{"participant_id": "n_ok", "pair_ids": pair_ids}, {"participant_id": "n_bad", "pair_ids": pair_ids}],
+    )
+
+    rows = parsing.parse_file(path, "no_letters")
+
+    assert {r["participant_id"] for r in rows} == {"n_ok"}
+    assert len(rows) == len(pair_ids)
+
+
+def test_acquisition_exclusion_is_condition_scoped(write_result_file, pair_ids, monkeypatch):
+    """The id is only dropped from No-Letters. The two conditions share no
+    participant ids in the real data, but scoping keeps a coincidental
+    collision from silently deleting a Letters participant."""
+    monkeypatch.setattr(config, "NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID", "shared_id")
+    letters_path = write_result_file("letters.txt", "letters", [{"participant_id": "shared_id", "pair_ids": pair_ids}])
+    no_letters_path = write_result_file(
+        "no_letters.txt", "no_letters", [{"participant_id": "shared_id", "pair_ids": pair_ids}]
+    )
+
+    df = parsing.load_all({"letters": letters_path, "no_letters": no_letters_path})
+
+    assert set(df[df["condition"] == "letters"]["participant_id"]) == {"shared_id"}
+    assert df[df["condition"] == "no_letters"].empty
+
+
+def test_no_acquisition_exclusion_when_unset(write_result_file, pair_ids, monkeypatch):
+    monkeypatch.setattr(config, "NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID", None)
+    path = write_result_file("no_letters.txt", "no_letters", [{"participant_id": "n1", "pair_ids": pair_ids}])
+
+    assert parsing.excluded_participant_ids("no_letters") == set()
+    assert {r["participant_id"] for r in parsing.parse_file(path, "no_letters")} == {"n1"}

@@ -56,7 +56,7 @@ misconfigure and no multi-GB CUDA toolkit to download.
 
 ```bash
 conda env create -f environment.yml
-conda activate web-analysis
+conda activate sim_rich_analysis_env
 ```
 
 **Watching the live solve/install progress** (instead of a static
@@ -149,48 +149,78 @@ popping up GUI windows.
   degradation level, `config.BACKEND` vs each of `config.EXTRA_BACKENDS`, one
   figure per condition; see `run._run_integrated_figures()`.
 
-  DinoV2's single pooled embedding (final-block CLS token) is one arbitrary
-  choice among many possible depth/pooling combinations --
-  `supplemental/dinov2_layer_grid_search/` is a standalone script (not part
-  of `run.py`) that grid-searches DINOv2's 12 transformer blocks x
-  {cls, mean-pooled patch tokens} against human similarity judgments to find
-  which combination correlates best; see its own README for details.
+  **Which DinoV2 configs the pipeline reports** is resolved by
+  `embeddings.dinov2_layers()`, in priority order:
 
-  **`run.py` picks this up automatically.** If that grid search has already
-  been run (`config.DINOV2_GRID_SEARCH_RESULTS_PATH` exists), DinoV2's
-  "layers" in the main pipeline become the top `config.DINOV2_GRID_TOP_N`
-  (block, pooling) configs ranked by `avg_vector_r` in that file, instead of
-  the single size-1 `SINGLE_LAYER_BACKEND_LABELS`/`_COLORS` fallback -- so
-  the best-layer figure gets a genuine multi-config color spread for DinoV2
-  too, the same way it does for ResNet-Places50's 3 examined layers (see
-  `embeddings.dinov2_grid_layers()` / `run._layers_for_backend()`). Since the
-  grid search already computed and cached these configs' embeddings under
-  the same `data/embeddings/` cache the main pipeline reads from, this costs
-  nothing extra to run. Falls back to the single pooled embedding if the
-  grid search hasn't been run yet.
+  1. **`config.DINOV2_PINNED_CONFIGS` (the shipped default).** A fixed,
+     a-priori set: three depths spaced evenly across the 12-block ViT-S
+     (blocks 4 / 8 / 12), each read out both ways DinoV2 is normally used --
+     CLS token and mean-pooled patch tokens. Depth and pooling are crossed so
+     the two factors stay separable in the figures.
+     `config.DINOV2_PINNED_DEFAULT_CONFIG` (`block12_cls`, i.e. what
+     `DinoV2Extractor` returns on its own) names the single config that
+     stands in for DinoV2 wherever one representative layer is plotted --
+     **not** the first entry, which is the shallowest block.
+  2. **The grid search**, if pinning is cleared to `()`. See below.
+  3. The single pooled `SINGLE_LAYER_BACKEND_LABELS`/`_COLORS` fallback.
+
+  *Why pinned by default:* `supplemental/dinov2_layer_grid_search/` is a
+  standalone script (not part of `run.py`) that scores all 12 blocks x
+  {cls, mean} against the human similarity judgments and ranks them by
+  `avg_vector_r`. Letting it choose means the reported configs are selected
+  on the same ratings the pipeline then reports, so their r is optimistically
+  biased. Pinning removes that selection step, putting DinoV2 on the same
+  footing as ResNet-Places50, whose `config.LAYERS` are likewise fixed and
+  never data-selected. The grid search remains available as exploratory
+  analysis -- it writes its own outputs and no longer drives `run.py`.
+
+  ⚠ *One asymmetry to keep in mind when reading the best-layer figures:* the
+  pinned set has 6 configs against ResNet-Places50's 3 examined layers, and
+  `best_layer_per_participant` takes a per-participant max, so DinoV2 draws
+  its maximum from a larger pool. That inflates DinoV2's best-layer bars
+  slightly relative to ResNet's. It is a far smaller effect than the
+  grid-search selection it replaced (best-of-6-fixed vs best-of-3, rather
+  than top-3-of-24-fitted), but it is not zero -- the per-config figures,
+  which involve no maximum, are the clean comparison.
 
 - **Distances** (`distances.py`): cosine distance throughout. These CNN
   layers are ReLU-activated (non-negative), so cosine distance stays in
   `[0, 1]` and `similarity = 1 - distance` is a valid bounded similarity.
-- **Exclusions** (`analysis.py` / `config.py`): the Letters exclusion
-  (`letter_discrimination_correct` accuracy < 80%) is computed
-  automatically from the data — verified to match the PDF's N=19 exactly
-  (one participant at 66.5% accuracy). The No-Letters exclusion ("claimed
-  technical problems") is a self-report with **no corresponding field in
-  the JSON** — set `NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID` in
-  `config.py` if you know which participant that was; it defaults to
-  `None` (N=20, all included).
+- **Exclusions**: the two conditions exclude at **different stages**, on
+  purpose.
+  - *Letters* (`analysis.py` / `config.py`): `letter_discrimination_correct`
+    accuracy < 80%, computed automatically from the parsed data — verified to
+    match the PDF's N=19 exactly (one participant at 66.5% accuracy). Excluded
+    **downstream**, so the participant stays in the tidy DataFrame: one figure
+    deliberately plots them to justify the threshold.
+  - *No-Letters* (`config.py` / `parsing.py`): the PDF's "claimed technical
+    problems" exclusion is a self-report with **no corresponding field in the
+    JSON**, but the participant was recovered from the raw file's presentation
+    telemetry — that participant is the only one of the 20 with any
+    missing frame-timing block (165 of 212 trials logged none, vs 212/212 for
+    everyone else). Independently corroborated behaviorally: their leave-one-out
+    reliability is **0.06** against a next-lowest of **0.57**, a gap wider than
+    the entire spread of the remaining 19. Since this names a specific id rather
+    than scoring a rule, it is applied at **acquisition**
+    (`parsing.parse_file`) — the participant never enters the tidy DataFrame,
+    so no derived figure or cached artifact can reintroduce them. The id itself
+    is a Prolific participant identifier and is **not in this repository**: copy
+    `local_config.example.py` to `local_config.py` (untracked) and fill it in,
+    or leave `NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID = None` to analyze all
+    N=20. `config.py` warns at import if the local file is missing, since the
+    silent fallback would otherwise reproduce the N=20 numbers.
 - **Reliability**: `leave_one_out_reliability()` doubles as both the
   PDF's headlined R_LOO and the noise ceiling plotted alongside model
   bars. `split_half_reliability()` is Spearman-Brown corrected over
   `config.SPLIT_HALF_N_ITER` (1000) random participant-split iterations.
   Both were validated against the PDF's headline numbers using the real
-  rating data during development: computed R_LOO ≈ 0.39 (Letters) / 0.73
-  (No-Letters) vs. the PDF's ≈0.44 / ≈0.78 — in the right ballpark and same
-  direction (No-Letters much more reliable), with the remaining gap
-  plausibly explained by the still-unresolved No-Letters exclusion above
-  and by this being a different (web) data collection than the original
-  PDF's. Every "vs noise ceiling" figure carries a symbolic footnote
+  rating data: computed R_LOO ≈ 0.39 (Letters) / **0.76** (No-Letters) vs.
+  the PDF's ≈0.44 / ≈0.78 — in the right ballpark and same direction
+  (No-Letters much more reliable). Resolving the No-Letters exclusion above
+  moved that figure from 0.73 (N=20) to 0.76 (N=19), i.e. most of the way to
+  the PDF's ≈0.78; the residual gap is attributable to this being a different
+  (web) data collection than the original PDF's. Every "vs noise ceiling"
+  figure carries a symbolic footnote
   naming both r values' source (LOO / split-half + its iteration count),
   so the methodology behind the plotted numbers is never left implicit.
 - **CPU / memory**: batching is small (`config.BATCH_SIZE = 8`) and

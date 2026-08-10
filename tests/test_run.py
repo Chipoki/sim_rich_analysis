@@ -79,11 +79,15 @@ def test_run_end_to_end_smoke(synthetic_pipeline_env):
 
     # Cross-condition figures: one bar + one ratio-line-plot per examined
     # layer (config.LAYERS is monkeypatched to a single "avgpool" entry for
-    # resnet50_places365 in this fixture; dinov2 has its own single-layer key).
+    # resnet50_places365 in this fixture). dinov2's layer keys are whatever
+    # run._layers_for_backend resolves -- the a-priori pinned configs when
+    # pinning is on, else its single pooled key -- so derive them rather than
+    # hardcoding, and the assertion keeps covering the shipped configuration.
     assert (config.DIAGRAMS_DIR / "resnet50" / "degradation" / "letters_vs_no_letters_avgpool.png").exists()
     assert (config.DIAGRAMS_DIR / "resnet50" / "degradation" / "letters_vs_no_letters_ratio_avgpool.png").exists()
-    assert (config.DIAGRAMS_DIR / "dinov2" / "degradation" / "letters_vs_no_letters_dinov2.png").exists()
-    assert (config.DIAGRAMS_DIR / "dinov2" / "degradation" / "letters_vs_no_letters_ratio_dinov2.png").exists()
+    for layer in run._layers_for_backend("dinov2"):
+        assert (config.DIAGRAMS_DIR / "dinov2" / "degradation" / f"letters_vs_no_letters_{layer}.png").exists()
+        assert (config.DIAGRAMS_DIR / "dinov2" / "degradation" / f"letters_vs_no_letters_ratio_{layer}.png").exists()
 
     # Integrated (cross-model) comparison: resnet50 vs dinov2's best-layer r,
     # one figure per condition, built once after both backends have run.
@@ -121,28 +125,52 @@ def test_run_extra_backends_disabled_produces_single_backend_results(monkeypatch
     assert not (config.DIAGRAMS_DIR / "integrated").exists()
 
 
+@pytest.fixture
+def pinning_disabled(monkeypatch):
+    """Clear config.DINOV2_PINNED_CONFIGS. embeddings.dinov2_layers() resolves
+    the pinned set first, so without this the shipped pins short-circuit the
+    grid-search and single-pooled fallbacks these tests are about."""
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ())
+
+
 def test_layers_for_backend_resnet_returns_config_layers():
     assert run._layers_for_backend("resnet50_places365") == config.LAYERS
 
 
-def test_layers_for_backend_single_layer_backend_keyed_by_backend_name(patch_result_dirs):
+def test_layers_for_backend_single_layer_backend_keyed_by_backend_name(patch_result_dirs, pinning_disabled):
     # patch_result_dirs redirects config.DINOV2_GRID_SEARCH_RESULTS_PATH to a
     # nonexistent tmp path, so this deterministically exercises the
     # no-grid-search fallback regardless of the real machine's state.
     assert run._layers_for_backend("dinov2") == {"dinov2": "DinoV2"}
 
 
-def test_default_layer_for_backend(patch_result_dirs):
+def test_default_layer_for_backend(patch_result_dirs, pinning_disabled):
     assert run._default_layer_for_backend("resnet50_places365") == config.DEFAULT_LAYER
     assert run._default_layer_for_backend("dinov2") == "dinov2"
 
 
-def test_layer_colors_for_backend(patch_result_dirs):
+def test_layer_colors_for_backend(patch_result_dirs, pinning_disabled):
     assert run._layer_colors_for_backend("resnet50_places365") == config.LAYER_COLORS
     assert run._layer_colors_for_backend("dinov2") == {"dinov2": config.SINGLE_LAYER_BACKEND_COLORS["dinov2"]}
 
 
-def test_layers_for_backend_dinov2_uses_grid_search_results_when_present(patch_result_dirs, monkeypatch):
+def test_layers_for_backend_dinov2_uses_pinned_configs(patch_result_dirs, monkeypatch):
+    """The shipped configuration: dinov2's "layers" are the a-priori pinned
+    set, and the representative layer is the explicitly nominated one -- NOT
+    the first entry, which is the shallowest block."""
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ("block04_cls", "block04_mean", "block12_cls"))
+    monkeypatch.setattr(config, "DINOV2_PINNED_DEFAULT_CONFIG", "block12_cls")
+
+    layers = run._layers_for_backend("dinov2")
+
+    assert list(layers.keys()) == ["block04_cls", "block04_mean", "block12_cls"]
+    assert run._default_layer_for_backend("dinov2") == "block12_cls"
+    assert len(set(run._layer_colors_for_backend("dinov2").values())) == 3
+
+
+def test_layers_for_backend_dinov2_uses_grid_search_results_when_present(
+    patch_result_dirs, monkeypatch, pinning_disabled
+):
     """When supplemental/dinov2_layer_grid_search has already dumped
     grid_results.pkl, dinov2's "layers" for the main pipeline become the top
     config.DINOV2_GRID_TOP_N ranked (block, pooling) configs instead of the

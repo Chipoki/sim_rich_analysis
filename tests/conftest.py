@@ -195,9 +195,14 @@ class StubExtractor(embeddings.EmbeddingExtractor):
     """
 
     # Covers every layer key any real extractor ever requests: resnet50_places365's
-    # 3 layers, plus each single-layer backend's own key (config.SINGLE_LAYER_BACKEND_LABELS) --
-    # so this one stub works for extract_level() regardless of which backend is under test.
-    LAYER_DIMS = {"avgpool": 8, "layer4": 16, "classifier": 4, "dinov2": 8}
+    # 3 layers, each single-layer backend's own key (config.SINGLE_LAYER_BACKEND_LABELS),
+    # and the a-priori dinov2 configs (config.DINOV2_PINNED_CONFIGS) that run.py asks
+    # for whenever pinning is on -- so this one stub works for extract_level()
+    # regardless of which backend is under test.
+    LAYER_DIMS = {
+        "avgpool": 8, "layer4": 16, "classifier": 4, "dinov2": 8,
+        **{config_key: 8 for config_key in config.DINOV2_PINNED_CONFIGS},
+    }
     BACKEND_KEY = "stub"
 
     def __init__(self):

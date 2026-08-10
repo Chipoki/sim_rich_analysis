@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import config
 import progress
 
 TIMING_FIELDS = [
@@ -104,14 +105,38 @@ def _parse_participant(trials: list[dict], condition: str) -> tuple[dict, list[d
     return meta, rows
 
 
+def excluded_participant_ids(condition: str) -> set[str]:
+    """
+    Participant ids dropped at acquisition for `condition`, i.e. before they
+    ever reach the tidy DataFrame.
+
+    Only the No-Letters technical-problems exclusion belongs here: it names a
+    specific participant up front (see config), so nothing downstream has any
+    reason to see them. The Letters exclusion is deliberately *not* here --
+    it's scored from letter_discrimination_correct in the parsed data itself
+    (analysis.get_excluded_participants), and one figure plots that excluded
+    participant on purpose to justify the threshold.
+    """
+    if condition == "no_letters" and config.NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID:
+        return {config.NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID}
+    return set()
+
+
 def parse_file(path: Path, condition: str) -> list[dict]:
     """Parse a whole result file (one participant per line) into tidy rows."""
     rows = []
+    excluded = excluded_participant_ids(condition)
     with open(path) as f:
         lines = [line.strip() for line in f if line.strip()]
     for line in progress.bar(lines, desc=f"{condition} participants", depth=progress.STEP):
         trials = json.loads(line)
-        _meta, participant_rows = _parse_participant(trials, condition)
+        meta, participant_rows = _parse_participant(trials, condition)
+        if meta["participant_id"] in excluded:
+            progress.write(
+                f"   [{condition}] dropped participant {meta['participant_id']} at acquisition "
+                f"({len(participant_rows)} trial rows) -- see config.NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID"
+            )
+            continue
         rows.extend(participant_rows)
     return rows
 

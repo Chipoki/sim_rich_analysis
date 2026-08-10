@@ -87,17 +87,17 @@ def _transition_ratios(by_level: dict[str, pd.Series]) -> list[float]:
 def _layers_for_backend(backend: str) -> dict[str, str]:
     """Internal layer key -> human label for whichever backend is active.
     resnet50_places365 exposes the 3 examined layers (config.LAYERS); dinov2
-    exposes the top config.DINOV2_GRID_TOP_N (block, pooling) configs from
-    the supplemental grid search if it's already been run (see
-    embeddings.dinov2_grid_layers()); every other case (including dinov2
-    without a grid search on disk) exposes a single pooled embedding keyed by
-    its own name."""
+    exposes the a-priori config.DINOV2_PINNED_CONFIGS, or the supplemental
+    grid search's top configs if pinning is off (see
+    embeddings.dinov2_layers()); every other case (including dinov2 with
+    neither available) exposes a single pooled embedding keyed by its own
+    name."""
     if backend == "resnet50_places365":
         return config.LAYERS
     if backend == "dinov2":
-        grid_layers = embeddings.dinov2_grid_layers()
-        if grid_layers:
-            return grid_layers
+        dinov2_layers = embeddings.dinov2_layers()
+        if dinov2_layers:
+            return dinov2_layers
     return {backend: config.SINGLE_LAYER_BACKEND_LABELS[backend]}
 
 
@@ -105,6 +105,12 @@ def _default_layer_for_backend(backend: str) -> str:
     if backend == "resnet50_places365":
         return config.DEFAULT_LAYER
     if backend == "dinov2":
+        # Pinned: the explicitly nominated representative config, NOT the
+        # first entry -- DINOV2_PINNED_CONFIGS is ordered by depth, so its
+        # first entry is the shallowest block and a poor stand-in for the
+        # model. Grid: the top-ranked config, which is a meaningful "first".
+        if embeddings.dinov2_pinned_layers():
+            return config.DINOV2_PINNED_DEFAULT_CONFIG
         grid_layers = embeddings.dinov2_grid_layers()
         if grid_layers:
             return next(iter(grid_layers))  # top-ranked config
@@ -115,9 +121,9 @@ def _layer_colors_for_backend(backend: str) -> dict[str, str]:
     if backend == "resnet50_places365":
         return config.LAYER_COLORS
     if backend == "dinov2":
-        grid_layers = embeddings.dinov2_grid_layers()
-        if grid_layers:
-            return embeddings.dinov2_grid_layer_colors(grid_layers)
+        dinov2_layers = embeddings.dinov2_layers()
+        if dinov2_layers:
+            return embeddings.dinov2_grid_layer_colors(dinov2_layers)
     return {backend: config.SINGLE_LAYER_BACKEND_COLORS[backend]}
 
 
@@ -449,11 +455,16 @@ def run():
         dist_vectors_by_backend = {}
         for backend in backends:
             if backend == "dinov2":
-                grid_layers = embeddings.dinov2_grid_layers()
-                if grid_layers:
+                if embeddings.dinov2_pinned_layers():
+                    progress.write(
+                        f"   [dinov2] a-priori pinned configs (grid search not consulted): "
+                        f"{list(embeddings.dinov2_pinned_layers())} | default={config.DINOV2_PINNED_DEFAULT_CONFIG}"
+                    )
+                elif embeddings.dinov2_grid_layers():
+                    grid_layers = embeddings.dinov2_grid_layers()
                     progress.write(f"   [dinov2] grid search found -- using top {len(grid_layers)} configs: {list(grid_layers)}")
                 else:
-                    progress.write("   [dinov2] no grid search results found -- using single pooled embedding")
+                    progress.write("   [dinov2] no pinned or grid configs found -- using single pooled embedding")
             embs = compute_all_embeddings(pair_ids, backend)
             dist_vectors = distances.build_dist_vectors(embs, pair_ids)
             suffix = "" if backend == config.BACKEND else f"_{backend}"

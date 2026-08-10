@@ -64,10 +64,12 @@ def test_extract_level_raises_when_no_images(patch_result_dirs, tiny_image_dir):
         StubExtractor().extract_level("Full", empty_dir, ["avgpool"])
 
 
-def test_get_extractor_dispatch(patch_result_dirs):
+def test_get_extractor_dispatch(patch_result_dirs, monkeypatch):
     # patch_result_dirs redirects config.DINOV2_GRID_SEARCH_RESULTS_PATH to a
-    # nonexistent tmp path, so "dinov2" deterministically falls back to the
-    # single pooled extractor here regardless of what's on the real machine.
+    # nonexistent tmp path, and pinning is cleared here, so "dinov2"
+    # deterministically falls back to the single pooled extractor regardless
+    # of what's on the real machine or in config.
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ())
     assert isinstance(embeddings.get_extractor("resnet50_places365"), embeddings.ResNetPlacesExtractor)
     assert isinstance(embeddings.get_extractor("dinov2"), embeddings.DinoV2Extractor)
     with pytest.raises(ValueError):
@@ -216,6 +218,75 @@ def test_dinov2_grid_layers_defaults_top_n_to_config(patch_result_dirs, monkeypa
     ])
 
     assert list(embeddings.dinov2_grid_layers().keys()) == ["block12_mean"]
+
+
+# -- dinov2_pinned_layers() / dinov2_layers(): the a-priori config set, which
+# takes precedence over any grid-search ranking ----------------------------
+
+
+def test_pinned_layers_returns_configs_in_declared_order(monkeypatch):
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ("block04_cls", "block04_mean", "block12_cls"))
+    monkeypatch.setattr(config, "DINOV2_PINNED_DEFAULT_CONFIG", "block12_cls")
+
+    layers = embeddings.dinov2_pinned_layers()
+
+    assert list(layers.keys()) == ["block04_cls", "block04_mean", "block12_cls"]
+    assert layers["block04_mean"] == "Block04_Mean"
+
+
+def test_pinned_layers_none_when_disabled(monkeypatch):
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ())
+    assert embeddings.dinov2_pinned_layers() is None
+
+
+def test_pinned_layers_rejects_unknown_config_key(monkeypatch):
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ("block04_cls", "block99_cls"))
+    with pytest.raises(ValueError, match="unknown config key"):
+        embeddings.dinov2_pinned_layers()
+
+
+def test_pinned_layers_rejects_default_outside_the_pinned_set(monkeypatch):
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ("block04_cls",))
+    monkeypatch.setattr(config, "DINOV2_PINNED_DEFAULT_CONFIG", "block12_cls")
+    with pytest.raises(ValueError, match="DINOV2_PINNED_DEFAULT_CONFIG"):
+        embeddings.dinov2_pinned_layers()
+
+
+def test_dinov2_layers_prefers_pinned_over_grid_results(patch_result_dirs, monkeypatch):
+    """The whole point of pinning: a grid_results.pkl on disk must not
+    influence which configs the main pipeline reports."""
+    _write_grid_results(config.DINOV2_GRID_SEARCH_RESULTS_PATH, [
+        {"config_key": "block11_cls", "block": 11.0, "pooling": "cls", "avg_vector_r": 0.99},
+    ])
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ("block04_cls", "block12_cls"))
+    monkeypatch.setattr(config, "DINOV2_PINNED_DEFAULT_CONFIG", "block12_cls")
+
+    assert list(embeddings.dinov2_layers().keys()) == ["block04_cls", "block12_cls"]
+
+
+def test_dinov2_layers_falls_back_to_grid_when_pinning_disabled(patch_result_dirs, monkeypatch):
+    _write_grid_results(config.DINOV2_GRID_SEARCH_RESULTS_PATH, [
+        {"config_key": "block11_cls", "block": 11.0, "pooling": "cls", "avg_vector_r": 0.99},
+    ])
+    monkeypatch.setattr(config, "DINOV2_PINNED_CONFIGS", ())
+
+    assert list(embeddings.dinov2_layers().keys()) == ["block11_cls"]
+
+
+def test_shipped_pinned_config_crosses_depth_and_pooling():
+    """Guards the a-priori design itself: every pinned depth must appear with
+    both poolings, so depth and pooling stay separable in the figures."""
+    layers = embeddings.dinov2_pinned_layers()
+    assert layers is not None, "the shipped config pins a set; see config.DINOV2_PINNED_CONFIGS"
+
+    by_depth = {}
+    for key in layers:
+        block, pooling = key.split("_")
+        by_depth.setdefault(block, set()).add(pooling)
+
+    assert len(by_depth) == 3
+    assert all(poolings == set(config.DINOV2_GRID_POOLINGS) for poolings in by_depth.values())
+    assert len(config.DINOV2_GRID_TOP_N_COLORS) >= len(layers)
 
 
 def test_dinov2_grid_layer_colors_assigns_in_ranked_order():

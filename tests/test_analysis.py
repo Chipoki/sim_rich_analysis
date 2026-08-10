@@ -21,7 +21,11 @@ def _make_wide():
     return wide
 
 
-def test_get_excluded_participants_computed_from_letter_accuracy(write_result_file, pair_ids):
+def test_get_excluded_participants_computed_from_letter_accuracy(write_result_file, pair_ids, monkeypatch):
+    # Pinned to None so this test isolates the *computed* Letters exclusion:
+    # the real constant now names a participant (see config), which would
+    # otherwise show up in the No-Letters assertion below.
+    monkeypatch.setattr(config, "NO_LETTERS_MANUAL_EXCLUDE_PARTICIPANT_ID", None)
     letters_path = write_result_file(
         "letters.txt",
         "letters",
