@@ -191,9 +191,12 @@ embeddings.py → distances.py         ↗
 
 6. Session legacy node (Obsidian)
     - Location: The persistent history of our collaboration lives in the knowledge vault, **not in this repo**:
-      `~/Documents/obsidian_knowledge/95 AI Session Legacy/MSc Research/Sim-Rich Analysis.md`.
+      the node **named `Sim-Rich Analysis`** under `~/Documents/obsidian_knowledge/95 AI Session Legacy/`.
+      Resolve its folder from the routing table in that directory's `_Legacy MOC.md` rather than from a
+      path written here — the corpus re-arranges its sub-categories as nodes are added, and this line
+      went stale on 2026-09-08 when `MSc Research/Sim-Rich/` was split out.
       Corpus index: `95 AI Session Legacy/_Legacy MOC.md`. Full corpus rules: `~/.claude/CLAUDE.md` §6–§7.
-      Sibling node: `MSc Research/Sim-Rich Experiment.md` (the experiment-side repo) — read it too when a
+      Sibling node: `Sim-Rich Experiment` (the experiment-side repo) — read it too when a
       change spans both.
     - Session start behavior: At the start of each new session:
         - Read the node to recover context.
