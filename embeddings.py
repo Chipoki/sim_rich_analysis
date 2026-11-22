@@ -60,14 +60,23 @@ class EmbeddingExtractor(ABC):
     def _preprocess(self, image: Image.Image):
         """PIL image -> framework tensor, ready to stack into a batch."""
 
-    def extract_level(self, level: str, image_dir: Path, layers: list[str]) -> dict[str, dict[str, np.ndarray]]:
+    def extract_level(
+        self, level: str, image_dir: Path, layers: list[str],
+        cache_root: Path | None = None, images: dict[str, Path] | None = None,
+    ) -> dict[str, dict[str, np.ndarray]]:
         """
         Compute (or load from cache) embeddings for every image in
         `image_dir`, for each requested layer.
 
+        The cache is keyed by level name alone, so a second stimulus set with
+        the same level names (the lab experiment's, see lab.py) must pass its
+        own `cache_root` -- under the default it would be handed the web
+        set's embeddings. `images` ({image_id: file}) names that set's files
+        when they aren't `image_<id>.<ext>` files of `image_dir`.
+
         Returns {layer_name: {image_id: np.ndarray}}.
         """
-        cache_dir = config.EMBEDDINGS_DIR / config.BACKEND_DIR_NAMES.get(self.BACKEND_KEY, self.BACKEND_KEY)
+        cache_dir = (cache_root or config.EMBEDDINGS_DIR) / config.BACKEND_DIR_NAMES.get(self.BACKEND_KEY, self.BACKEND_KEY)
         cache_paths = {layer: cache_dir / f"{level}_{layer}.pkl" for layer in layers}
         cached = {}
         missing_layers = []
@@ -81,11 +90,12 @@ class EmbeddingExtractor(ABC):
         if not missing_layers:
             return cached
 
-        image_paths = sorted(
-            p for p in image_dir.iterdir()
-            if p.suffix.lower() in config.IMAGE_EXTENSIONS and p.stem.startswith("image_")
-        )
-        if not image_paths:
+        if images is None:
+            images = {
+                p.stem.replace("image_", ""): p for p in sorted(image_dir.iterdir())
+                if p.suffix.lower() in config.IMAGE_EXTENSIONS and p.stem.startswith("image_")
+            }
+        if not images:
             raise FileNotFoundError(f"No images found under {image_dir}")
 
         if self._model is None:
@@ -104,8 +114,7 @@ class EmbeddingExtractor(ABC):
             batch.clear()
             batch_ids.clear()
 
-        for p in progress.bar(image_paths, desc=f"{level} images", depth=progress.STEP):
-            img_id = p.stem.replace("image_", "")
+        for img_id, p in progress.bar(images.items(), total=len(images), desc=f"{level} images", depth=progress.STEP):
             with Image.open(p) as im:
                 im = im.convert("RGB")
                 batch.append(self._preprocess(im))

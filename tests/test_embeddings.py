@@ -57,6 +57,21 @@ def test_extract_level_partial_cache_recomputes_only_missing_layer(patch_result_
     assert set(result["avgpool"].keys()) == {"001", "002"}
 
 
+def test_extract_level_takes_named_files_and_a_cache_root_of_its_own(patch_result_dirs, tiny_image_dir, tmp_path):
+    """A second stimulus set (the lab's) names its own files and must not share the default cache."""
+    image_dir = tiny_image_dir(["001", "002"])
+    files = {"scene_a": image_dir / "image_001.jpg", "scene_b": image_dir / "image_002.jpg"}
+    extractor = StubExtractor()
+
+    result = extractor.extract_level("Full", image_dir, ["avgpool"], cache_root=tmp_path / "other_set", images=files)
+
+    assert set(result["avgpool"]) == {"scene_a", "scene_b"}
+    assert (tmp_path / "other_set" / "stub" / "Full_avgpool.pkl").exists()
+    assert not (config.EMBEDDINGS_DIR / "stub" / "Full_avgpool.pkl").exists()
+    # the default cache then holds nothing for this level, so the default call computes its own (ids 001, 002)
+    assert set(extractor.extract_level("Full", image_dir, ["avgpool"])["avgpool"]) == {"001", "002"}
+
+
 def test_extract_level_raises_when_no_images(patch_result_dirs, tiny_image_dir):
     empty_dir = tiny_image_dir([])
 
