@@ -1,6 +1,10 @@
 """
 End-to-end pipeline. Run with:  python run.py
 
+`python run.py --lab [--batch NAME ...]` runs the lab experiment's run type
+instead (lab_run.py): the lab participants, pooled over every batch or only
+the named ones, scored against the web pilot this default run caches.
+
 Steps:
   1. Parse both result files into one tidy DataFrame.
   2. Build human similarity vectors (cached to data/sim_vectors.pkl).
@@ -495,4 +499,18 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="The web pilot's pipeline, or with --lab the lab experiment's run type.")
+    parser.add_argument("--lab", action="store_true", help="score the lab experiment's participants (lab_run.py)")
+    parser.add_argument("--batch", nargs="+", metavar="NAME",
+                        help="with --lab: only these batch folders of config.LAB_RUNS_DIR (default: every batch, pooled)")
+    args = parser.parse_args()
+    if args.batch and not args.lab:
+        parser.error("--batch selects lab batches: use it with --lab")
+    if args.lab:
+        import lab_run  # here, not at the top: the default run needs none of it
+
+        lab_run.run(args.batch)
+    else:
+        run()

@@ -16,11 +16,26 @@ milestone messages emitted while a bar is active should go through
 `tqdm.write(...)` instead of `print(...)`.
 """
 
+from contextlib import contextmanager
 from typing import Iterable, Optional
 
 from tqdm import tqdm
 
 PIPELINE, STAGE, STEP = 0, 1, 2
+
+_silent = False
+
+
+@contextmanager
+def silenced():
+    """No bar is drawn for anything created inside the block. For a caller that runs the bar-reporting
+    analysis functions many times over small inputs (lab_run.py), where the dashboard would only flicker."""
+    global _silent
+    previous, _silent = _silent, True
+    try:
+        yield
+    finally:
+        _silent = previous
 
 _BAR_FORMAT = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
 
@@ -33,6 +48,7 @@ def pipeline_bar(stage_names: list[str]) -> tqdm:
         leave=True,
         desc="Pipeline",
         bar_format=_BAR_FORMAT,
+        disable=_silent,
     )
 
 
@@ -52,6 +68,7 @@ def bar(
         leave=leave,
         desc=desc,
         bar_format=_BAR_FORMAT,
+        disable=_silent,
     )
 
 

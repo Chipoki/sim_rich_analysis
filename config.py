@@ -272,6 +272,52 @@ SPLIT_HALF_N_ITER = 1000
 SPLIT_HALF_SEED = 0
 
 # --------------------------------------------------------------------------
+# Lab experiment (run type `python run.py --lab`; lab.py, lab_run.py)
+# --------------------------------------------------------------------------
+
+# The lab experiment's own tree (thesis/experiment), beside this repo's parent.
+LAB_EXPERIMENT_DIR = PROJECT_ROOT.parent.parent / "experiment"
+
+# One sub-folder per batch of participants, each holding its runs' folders
+# (P<serial>_<date>_<times>_complete). The pool is every batch.
+LAB_RUNS_DIR = LAB_EXPERIMENT_DIR / "collected_data" / "wet_runs"
+
+# Optional, kept by the experimenter: one row per participant (`participant`,
+# then any label columns, e.g. `strategy`). The first label column sets the
+# marker shape in the per-participant figure. Participant-level, so it lives
+# with the data, never in this repo.
+LAB_PARTICIPANT_LABELS = LAB_RUNS_DIR / "participant_labels.csv"
+
+# Web image id -> the lab's file name for that image (the same name at every
+# level). The lab shows the web pilot's 200 fixed pairs, so its ratings are
+# keyed by the pilot's own pair_ids.
+LAB_ID_MAP = LAB_EXPERIMENT_DIR / "sim_rich_experiment" / "stimuli_web_id_to_local_map.json"
+
+# Level -> folder of the lab's own pixels, in degradation order. Scramble 0.5
+# ("Deg05", between Full and Deg3) is not rendered yet: add its folder here
+# once stimuli/main400_levels/ holds it.
+LAB_LEVEL_DIRS = {
+    "Full": LAB_EXPERIMENT_DIR / "stimuli" / "Chosen_425",
+    "Deg3": LAB_EXPERIMENT_DIR / "stimuli" / "main400_levels" / "scramble_3.0",
+    "Tunnel": LAB_EXPERIMENT_DIR / "stimuli" / "main400_levels" / "tunnel",
+}
+LEVEL_LABELS = {"Full": "Full", "Deg05": "Scramble 0.5", "Deg3": "Scramble 3.0", "Tunnel": "Tunnel"}
+
+LAB_TRIALS_PER_BLOCK = 40
+
+# Written by the lab run type; created on first use. `data/` holds the caches
+# shared by every selection of batches (embeddings, distance vectors).
+LAB_RESULTS_DIR = PROJECT_ROOT.parent / "lab_analysis_results"
+LAB_DATA_DIR = LAB_RESULTS_DIR / "data"
+
+LAB_BOOTSTRAP_N = 2000
+LAB_BOOTSTRAP_SEED = 0
+LAB_PERMUTATIONS = 5000
+# A pilot group holds more groups of k raters than are worth scoring once k
+# grows (19 choose 9 = 92,378); beyond this many, a random draw of them.
+LAB_MAX_SUBGROUPS = 20000
+
+# --------------------------------------------------------------------------
 # Plotting
 # --------------------------------------------------------------------------
 

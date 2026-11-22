@@ -20,6 +20,9 @@ python run.py
 There is no linter or build step in this repo — it's a single-purpose analysis pipeline run end-to-end
 via `python run.py`. There is a `tests/` pytest suite (see below); there is no other build step.
 
+`python run.py --lab [--batch NAME ...]` is a second run type: the lab experiment's participants (README §2.1,
+`lab.py` / `lab_run.py` below). It reads the default run's caches, so the default run comes first.
+
 ### Tests
 
 ```bash
@@ -123,6 +126,23 @@ embeddings.py → distances.py         ↗
   cross-model comparisons that need more than one backend's results at once (e.g. ResNet50-Places365 vs
   DinoV2's best-layer correlation) live under `diagrams/integrated/` instead — see
   `run._run_integrated_figures()`.
+
+- **`lab.py`**, **`lab_run.py`** — the lab run type, beside the stage sequence above rather than in it. The lab
+  experiment shows the web pilot's 200 fixed pairs, so `lab.load_runs` turns run folders (one per participant, in
+  batch folders under `config.LAB_RUNS_DIR`) into ratings keyed by the pilot's `pair_id`s — matched as unordered
+  pairs, since the lab randomizes which image comes first — and `analysis.py`'s functions then apply unchanged
+  (`lab.as_wide`). `lab.model_vectors` runs the lab's own pixels (`config.LAB_LEVEL_DIRS`) through
+  `embeddings.py`/`distances.py`. **The embedding cache is keyed by level name alone**, and the lab's levels share
+  the web set's names: `extract_level(..., cache_root=, images=)` exists for that, and a lab call without its own
+  `cache_root` would silently be served the web set's embeddings
+  (`test_model_vectors_keep_a_cache_of_their_own_and_rebuild_for_a_new_level`). The pool grows batch by batch, so
+  the headline agreement statistic is the mean r between two raters (`lab.mean_pairwise_r`), which does not depend
+  on group size; R_LOO and split-half do, and are compared with the pilot's only through same-sized pilot subgroups
+  (`lab.subgroup_agreement`) or the two formulas (`lab.expected_loo`, `lab.spearman_brown`). `lab_run.compute`
+  returns every number as plain pandas/numpy; the figures (`lab_run.FIGURES`) and `summary` only draw from it, and
+  the write-up in `../supplamentary/lab_first_look/` is built from the same call. Participant-level inputs and
+  outputs (run folders, the optional labels CSV, `participants.csv`) live outside this repo, and the participant
+  files' free-text `notes`, which can name the participant, are never read into a table.
 
 - **`config.py`** — all paths, `LEVEL_FOLDERS` (degradation/desaturation level → stimulus subfolder name),
   `LAYERS`, `DEGRADATION_LEVELS` / `DESATURATION_LEVELS` groupings, exclusion thresholds, reliability/

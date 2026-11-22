@@ -93,6 +93,57 @@ Each analysis figure is saved (not displayed interactively) to
 `web_analysis_results/diagrams/`, so a full run completes unattended without
 popping up GUI windows.
 
+### 2.1 The lab run type
+
+```bash
+python run.py --lab                                       # every batch, pooled
+python run.py --lab --batch participants_1_to_4_221126    # only the named batch folder(s)
+```
+
+Scores the lab experiment's participants the way the web pilot was scored,
+with the pilot as yardstick (so run the default `python run.py` once first:
+it reads that run's caches). The lab shows the pilot's 200 fixed pairs, so
+lab ratings are keyed by the pilot's own `pair_id`s. Re-run it after every
+new batch: the model side is cached, and a run takes seconds.
+
+Inputs, all named in `config.py`'s lab section and all outside this repo:
+
+- `LAB_RUNS_DIR`: one sub-folder per batch, each holding its participants'
+  run folders (`P<serial>_..._complete`; test runs carry a suffix and are
+  left out). Adding a batch is copying its folder there.
+- `LAB_LEVEL_DIRS`: the lab's own pixels per level (Full, Scramble 3.0,
+  Tunnel; add Scramble 0.5 there once it is rendered and the next run embeds
+  it). The lab's degraded images use a wider aperture than the web's, so its
+  degraded-level numbers are not comparable with the web run's.
+- `LAB_PARTICIPANT_LABELS` (optional): a CSV the experimenter keeps, one row
+  per participant (`participant`, then label columns such as `strategy`).
+
+It writes `lab_analysis_results/<selection>/` (`pool`, or the batch names
+joined by `+`): `summary.md` (also printed), `participants.csv`,
+`trial_relations.csv`, `conditional_agreement.csv`, `subset_contrasts.csv`,
+`response_times.csv` and `diagrams/*.png`. Caches shared by every selection sit in
+`lab_analysis_results/data/`.
+
+What it reports:
+
+- **Agreement between raters** as the mean r between two raters, which does
+  not depend on group size (R_LOO and split-half do, so they cannot be
+  compared between a growing lab pool and the pilot's 19), against every
+  same-sized group of raters the pilot holds, and carried to any group size
+  by two formulas.
+- **The model at each level**, per rater, with intervals from resampling the
+  image pairs (raters held fixed), and the pilot groups on the same vectors.
+- **Relations**, a fixed set: per trial, the rating and its response time
+  against trial number, the pilot's ratings of the pair, the model's
+  similarity at each level and the colour-change task; agreement recomputed
+  within blocks, numbers of colour changes, dot-task outcomes and rating
+  speeds, with a shuffle test of two of those splits (`lab.SUBSET_CONTRASTS`:
+  trials without a colour change, and the fastest third of ratings, each
+  against the rest); and per participant, agreement against dot-task performance,
+  response times, scale use and the experimenter's labels. Nothing there is
+  corrected for the number of relations tried: it is a screen for what to
+  look at, not a set of tests.
+
 ## 3. Design notes
 
 - **Parsing** (`parsing.py`): verified directly against both real result
@@ -242,6 +293,8 @@ popping up GUI windows.
 | `plotting.py` | bar + per-participant-dot figures |
 | `progress.py` | pinned multi-line tqdm progress dashboard shared by every stage/sub-stage |
 | `run.py` | thin end-to-end orchestration |
+| `lab.py` | the lab experiment's runs → ratings/trials/participants tables, its model vectors, size-free agreement statistics, relations |
+| `lab_run.py` | the lab run type (`python run.py --lab`): numbers, figures, summary |
 | `tests/` | pytest suite (synthetic fixtures; one opt-in slow real-data test) — see §5 |
 
 ## 5. Tests
@@ -255,5 +308,7 @@ Every module has a matching `tests/test_<module>.py`. `tests/conftest.py` provid
 fixtures (a tiny trial-JSON factory matching the real jsPsych shape, tiny generated images, and a
 `StubExtractor` that fakes `EmbeddingExtractor`'s model so caching/batching logic is tested without real
 torch compute). `tests/test_run.py` is a full-pipeline smoke test on a small synthetic dataset.
+`tests/test_lab.py` covers the lab run type the same way (synthetic run folders, tiny images, the stub
+extractor, a made-up pilot cache), ending in its own end-to-end smoke test.
 `tests/test_slow_e2e.py` runs the real, unmocked pipeline and is skipped whenever real `src_data`/weights
 aren't present; `pytest.ini` also deselects it by default so plain `pytest` never triggers it.
