@@ -142,7 +142,37 @@ embeddings.py → distances.py         ↗
   returns every number as plain pandas/numpy; the figures (`lab_run.FIGURES`) and `summary` only draw from it, and
   the write-up in `../supplamentary/lab_first_look/` is built from the same call. Participant-level inputs and
   outputs (run folders, the optional labels CSV, `participants.csv`) live outside this repo, and the participant
-  files' free-text `notes`, which can name the participant, are never read into a table.
+  files' free-text `notes`, which can name the participant, are never read into a table. **A participant is
+  `S<k>`, not the folder's `P<serial>`**: the lab PC's serial starts over between batches (two batches both hold
+  a P1), so `lab.participant_ids` numbers every completed run under `LAB_RUNS_DIR` by start time, and the labels
+  CSV names a run by `batch` and `serial`. `lab.load_practice` scores each practice iteration
+  and reads from the run's log whether practice was *gated* (repeated until passed) and on what (attention; in the
+  runs of 2026-11-23 the rating too: `rating_criterion`). **An iteration is read from the folder of its images**
+  (`practice_iteration_<k>`, each with pairs of its own since 2026-11-25; `lab.practice_iterations`), and only in
+  the earlier runs, which repeated one set of pairs, from the trial's place over the number of different pairs;
+  the rating score needs the named pairs, so it is NaN after the first iteration; `lab.group_contrasts`
+  and `lab.group_agreement` then set the gated against the rest with exact p-values over every relabelling
+  (4 against 5: 126 ways, so no p below 1/126). `lab.colour_similarity` (RGB-histogram r) is one more per-pair
+  reference. A participant who rates nearly every pair the same has no correlation inside a small subset:
+  `lab.subset_contrasts` leaves them out and counts `participants`, where it once returned NaN with p = 0.
+  **The dot replaced the pilot's letters to stop the second task leaking into the rating**, so every lab run
+  reports `lab.rating_shifts` (mean rating of one kind of trial minus another's: `lab.RATING_SHIFTS`, e.g. no
+  colour change against some) beside the pilot's own letter effect scored by the same function
+  (`lab.pilot_letter_shift`). Test a shift as a difference in means, not as a rank correlation with the number of
+  changes: the pattern found (no change highest, one lowest, two between) has no trend for ρ to see. The
+  write-ups in `../supplamentary/lab_first_look/` are the companion and a one-page summary built from the same
+  values; the summary's panels are `lab_run.TAKEAWAY_PANELS`, each drawn on an axes it is given.
+  **Everything that depends on which second task a run had is in `lab.TASKS`**, keyed by `lab.DOT`
+  (`colour-change`) and `lab.LETTER_COUNT` (`letters-count`: the letters asked how many of a pair's two were the
+  block's target; prepared 2026-11-25, no run yet): the tables the module-level `RELATION_X`, `CONDITIONS`,
+  `SUBSET_CONTRASTS`, `RATING_SHIFTS` and `PARTICIPANT_RELATIONS` are for the dot, the columns they need
+  (`add_columns`), the per-participant measures and the column of what the task showed on a trial (`load`). A
+  trials table carries its `task` (`lab.task_of`), `clean` means the task answered right under either, and
+  `lab.find_runs` refuses a selection of runs with different tasks until one is named (`--task`; results then go
+  to `<selection>_<task>/`). `lab_run`'s task-specific labels are `TASK_MEASURES`, `CONDITION_TITLES`,
+  `LOAD_SENTENCE`, `CLEAN_TITLE` and `PARTICIPANT_X`. The dot's names and numbers are unchanged by this: the
+  nine participants' `values.json` is byte-identical before and after. The first-look companion's
+  `make_lab_assets.py` pins itself to the colour-change participants (`find_runs(task=lab.DOT)`).
 
 - **`config.py`** — all paths, `LEVEL_FOLDERS` (degradation/desaturation level → stimulus subfolder name),
   `LAYERS`, `DEGRADATION_LEVELS` / `DESATURATION_LEVELS` groupings, exclusion thresholds, reliability/

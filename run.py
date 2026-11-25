@@ -505,12 +505,17 @@ if __name__ == "__main__":
     parser.add_argument("--lab", action="store_true", help="score the lab experiment's participants (lab_run.py)")
     parser.add_argument("--batch", nargs="+", metavar="NAME",
                         help="with --lab: only these batch folders of config.LAB_RUNS_DIR (default: every batch, pooled)")
+    parser.add_argument("--task", metavar="NAME",
+                        help="with --lab: only the participants who did this second task (colour-change, letters-count); "
+                             "needed when the selected batches hold more than one")
     args = parser.parse_args()
+    if args.task and not args.lab:
+        parser.error("--task selects lab participants by their second task: use it with --lab")
     if args.batch and not args.lab:
         parser.error("--batch selects lab batches: use it with --lab")
     if args.lab:
         import lab_run  # here, not at the top: the default run needs none of it
 
-        lab_run.run(args.batch)
+        lab_run.run(args.batch, args.task)
     else:
         run()

@@ -98,7 +98,16 @@ popping up GUI windows.
 ```bash
 python run.py --lab                                       # every batch, pooled
 python run.py --lab --batch participants_1_to_4_221126    # only the named batch folder(s)
+python run.py --lab --task letters-count                 # only the participants who did that second task
 ```
+
+Participants who did different second tasks are not one group. A run's task is read from its first main trial
+(`lab.run_task`): `colour-change` (the dot; the nine participants so far) or `letters-count` (the letters, asked
+how many of a pair's two were the block's target letter; prepared 2026-11-25, no run yet). A selection that holds
+both is refused until `--task` names one, and its results then go to `<selection>_<task>/`. What differs between
+the two is in one place, `lab.TASKS`: the per-trial variables, the conditions, the rating shifts (for the letters,
+first of all the pilot's own bias, the same letter on both images against different letters) and the task's
+per-participant measures.
 
 Scores the lab experiment's participants the way the web pilot was scored,
 with the pilot as yardstick (so run the default `python run.py` once first:
@@ -110,18 +119,28 @@ Inputs, all named in `config.py`'s lab section and all outside this repo:
 
 - `LAB_RUNS_DIR`: one sub-folder per batch, each holding its participants'
   run folders (`P<serial>_..._complete`; test runs carry a suffix and are
-  left out). Adding a batch is copying its folder there.
+  left out). Adding a batch is copying its folder there. The lab PC's serial
+  starts over between batches, so participants are numbered `S1`, `S2`, ...
+  over every batch, in the order they ran (`lab.participant_ids`): a
+  participant keeps that id whichever batches a run selects.
 - `LAB_LEVEL_DIRS`: the lab's own pixels per level (Full, Scramble 3.0,
   Tunnel; add Scramble 0.5 there once it is rendered and the next run embeds
   it). The lab's degraded images use a wider aperture than the web's, so its
   degraded-level numbers are not comparable with the web run's.
 - `LAB_PARTICIPANT_LABELS` (optional): a CSV the experimenter keeps, one row
-  per participant (`participant`, then label columns such as `strategy`).
+  per participant, named by its `batch` folder and `serial` (`P<serial>`),
+  then label columns such as `strategy`.
+- `LAB_PRACTICE_MINIMUM`, `LAB_PRACTICE_PAIRS_DIR`,
+  `LAB_PRACTICE_ITERATION_PREFIX`: the experiment's practice minimums, the
+  folder holding the practice pairs named similar / different, and the name
+  of the folder each practice iteration shows its own pairs from.
 
 It writes `lab_analysis_results/<selection>/` (`pool`, or the batch names
 joined by `+`): `summary.md` (also printed), `participants.csv`,
 `trial_relations.csv`, `conditional_agreement.csv`, `subset_contrasts.csv`,
-`response_times.csv` and `diagrams/*.png`. Caches shared by every selection sit in
+`response_times.csv`, `practice.csv`, `blocks.csv`, `group_contrasts.csv`,
+`rating_shifts.csv`, `participant_relations.csv` and `diagrams/*.png`
+(figure 13 gathers the panels of a one-page summary). Caches shared by every selection sit in
 `lab_analysis_results/data/`.
 
 What it reports:
@@ -142,7 +161,42 @@ What it reports:
   against the rest); and per participant, agreement against dot-task performance,
   response times, scale use and the experimenter's labels. Nothing there is
   corrected for the number of relations tried: it is a screen for what to
-  look at, not a set of tests.
+  look at, not a set of tests. A participant whose ratings do not vary
+  inside a subset (one who gives nearly every pair the same rating) is left
+  out of that subset's contrast, and the table counts who entered.
+- **Practice and its gate.** Each practice iteration's two scores
+  (`lab.practice_scores`): attention, as the experiment computes it, and the
+  rating score the runs of 2026-11-23 were also held to, now only reported
+  and only where the iteration shows the named pairs (the first, since
+  2026-11-25, when every iteration got pairs of its own:
+  `lab.practice_iterations`). Whether the run's practice was *gated*,
+  scored and repeated while a score was short, and whether the rating was
+  one of its criteria (`rating_criterion`), are read from the run's log.
+  Gated participants are then set against the
+  rest: every participant-level measure with an exact p over all ways to
+  relabel the participants (`lab.group_contrasts`), and agreement between
+  two raters by whether both, neither or one of them is gated
+  (`lab.group_agreement`). Uncorrected, and a comparison of versions of the
+  experiment, not a randomized one.
+- **Colour.** Each rater against the pairs' colour similarity (the
+  correlation of the two images' RGB histograms, `lab.colour_similarity`): a
+  crude check of the "I went by colour" strategy participants report.
+- **Trial 201**: who said they noticed something and who picked the altered
+  image. Typed answers and the experimenter's notes are never read in.
+- **What moves the rating besides the pair** (`lab.rating_shifts`). The
+  pilot's letters leaked into the rating: a pair was rated about a point
+  higher when its two images carried the same letter. The run asks the same
+  of the dot (no colour change against one or two; the dot the same colour
+  on both images; a change during an image; a missed change; a stray press;
+  the dot's first colour; the order of the two images), as a difference in
+  mean rating with a within-participant shuffle p, and scores the pilot's
+  letter effect with the same function as the yardstick
+  (`lab.pilot_letter_shift`, read from `RESULT_FILES["letters"]`). A rank
+  correlation with the number of changes misses this: the pattern is not a
+  trend. Also whether a rating leans on the one before it
+  (`lab.sequential_dependence`), whether two raters agree more on pairs
+  they saw in the same order (`lab.order_agreement`), and a short list of
+  relations across participants (`lab.participant_relations`).
 
 ## 3. Design notes
 

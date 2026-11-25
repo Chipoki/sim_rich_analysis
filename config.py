@@ -279,13 +279,16 @@ SPLIT_HALF_SEED = 0
 LAB_EXPERIMENT_DIR = PROJECT_ROOT.parent.parent / "experiment"
 
 # One sub-folder per batch of participants, each holding its runs' folders
-# (P<serial>_<date>_<times>_complete). The pool is every batch.
+# (P<serial>_<date>_<times>_complete). The pool is every batch. The serial
+# starts over between batches, so participants are numbered S1, S2, ... over
+# the whole pool by start time (lab.participant_ids).
 LAB_RUNS_DIR = LAB_EXPERIMENT_DIR / "collected_data" / "wet_runs"
 
-# Optional, kept by the experimenter: one row per participant (`participant`,
-# then any label columns, e.g. `strategy`). The first label column sets the
-# marker shape in the per-participant figure. Participant-level, so it lives
-# with the data, never in this repo.
+# Optional, kept by the experimenter: one row per participant, named by its
+# `batch` folder and its `serial` (P<serial>), then any label columns, e.g.
+# `strategy`. The first label column sets the marker shape in the
+# per-participant figure. Participant-level, so it lives with the data,
+# never in this repo.
 LAB_PARTICIPANT_LABELS = LAB_RUNS_DIR / "participant_labels.csv"
 
 # Web image id -> the lab's file name for that image (the same name at every
@@ -303,7 +306,26 @@ LAB_LEVEL_DIRS = {
 }
 LEVEL_LABELS = {"Full": "Full", "Deg05": "Scramble 0.5", "Deg3": "Scramble 3.0", "Tunnel": "Tunnel"}
 
+# Bins per RGB channel of the histograms behind lab.colour_similarity.
+LAB_COLOUR_BINS = 4
+# Since 2026-11-25 practice iteration k shows the pairs of its own folder,
+# <prefix><k> (the experiment's practice_iteration_folder), the same pairs
+# for every participant: lab.practice_iterations reads a practice trial's
+# iteration from that name. Earlier runs showed one set of pairs, from two
+# other folders, in every iteration.
+LAB_PRACTICE_ITERATION_PREFIX = "practice_iteration_"
+# The practice pairs named similar / different (practice_<kind>_<k>_a/_b),
+# which the rating score is computed on (lab.practice_pair_colours). They are
+# among the first iteration's pairs: the files the earlier runs read from
+# task_familiarity_pairs, byte for byte and under the same names.
+LAB_PRACTICE_PAIRS_DIR = LAB_EXPERIMENT_DIR / "stimuli" / f"{LAB_PRACTICE_ITERATION_PREFIX}1"
+
 LAB_TRIALS_PER_BLOCK = 40
+# The experiment's practice minimums. A gated practice is repeated while its
+# attention score is below its minimum. The rating held a minimum too only in
+# the four runs of 2026-11-23 (the experiment dropped it on 2026-11-25): the
+# practice table's `rating_criterion` says which iterations were held to it.
+LAB_PRACTICE_MINIMUM = {"attention": 0.75, "rating": 0.75}
 
 # Written by the lab run type; created on first use. `data/` holds the caches
 # shared by every selection of batches (embeddings, distance vectors).
