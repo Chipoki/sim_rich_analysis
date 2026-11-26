@@ -345,7 +345,8 @@ def _participant_fields(path: Path) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # `notes`, the last field, is filled in by hand: an unescaped quote there must not cost the fields before it.
+        # `notes`, the last field, holds text typed in by hand (since 2026-11-26 the experimenter's two items, under
+        # the end questionnaire's answers; one free string before): an unescaped quote there must not cost the fields before it.
         return json.loads(text.split('"notes"')[0].rstrip().rstrip(",") + "}")
 
 
@@ -354,7 +355,8 @@ LABEL_KEYS = ["batch", "serial"]  # how the experimenter's labels file names a r
 
 def load_participants(run_dirs: list[Path]) -> pd.DataFrame:
     """One row per participant: batch, serial, the dialog's fields, and the experimenter's labels where a
-    config.LAB_PARTICIPANT_LABELS file gives any. The free-text `notes` (which may name the participant) are never read in.
+    config.LAB_PARTICIPANT_LABELS file gives any. The file's `notes` are never read in: free text that may name the
+    participant, and since 2026-11-26 also the end questionnaire's answers (`notes.debrief`), which no analysis here uses yet.
     """
     pid, rows = participant_ids(), []
     for run in run_dirs:
