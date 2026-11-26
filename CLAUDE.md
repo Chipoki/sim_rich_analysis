@@ -20,8 +20,8 @@ python run.py
 There is no linter or build step in this repo — it's a single-purpose analysis pipeline run end-to-end
 via `python run.py`. There is a `tests/` pytest suite (see below); there is no other build step.
 
-`python run.py --lab [--batch NAME ...]` is a second run type: the lab experiment's participants (README §2.1,
-`lab.py` / `lab_run.py` below). It reads the default run's caches, so the default run comes first.
+`python run.py --lab [--batch NAME ...] [--without S3 ...]` is a second run type: the lab experiment's participants
+(README §2.1, `lab.py` / `lab_run.py` below). It reads the default run's caches, so the default run comes first.
 
 ### Tests
 
@@ -138,7 +138,18 @@ embeddings.py → distances.py         ↗
   (`test_model_vectors_keep_a_cache_of_their_own_and_rebuild_for_a_new_level`). The pool grows batch by batch, so
   the headline agreement statistic is the mean r between two raters (`lab.mean_pairwise_r`), which does not depend
   on group size; R_LOO and split-half do, and are compared with the pilot's only through same-sized pilot subgroups
-  (`lab.subgroup_agreement`) or the two formulas (`lab.expected_loo`, `lab.spearman_brown`). `lab_run.compute`
+  (`lab.subgroup_agreement`) or the formulas (`lab.expected_loo`, `lab.expected_upper`, `lab.spearman_brown`).
+  **The noise ceiling has two bounds** (`lab.noise_ceiling`, per rater): lower, the rater against the mean of the
+  others (equal to `analysis.leave_one_out_reliability`), and upper, against the mean of all. The pilot's are
+  compared at the lab group's size only (`lab.subgroup_ceilings`; `lab._subgroup_members` draws the subgroups for
+  it and for `subgroup_agreement`, so the two describe the same subgroups row for row), and the model's fit is a
+  share of the lower ceiling of the raters it was scored on (`A["share"]`, `A["sub_ceiling"]`). A noisy group has
+  a low lower ceiling and so a high share: never quote a share without the same-sized pilot groups beside it.
+  `lab_run.compute(run_dirs, without=[...])` also scores the group without the named participants: `A["rest"]` is
+  the same computation for the others (`None` when nobody is named), and a figure draws it, dashed (`DASH`,
+  `REST_LINE`, `_tick`), only when it is there. **A run that takes nobody out must draw exactly what it drew**:
+  the first-look companion's one-page summary draws its panels with `rest=None` and has no room for more.
+  `lab_run.compute`
   returns every number as plain pandas/numpy; the figures (`lab_run.FIGURES`) and `summary` only draw from it, and
   the write-up in `../supplamentary/lab_first_look/` is built from the same call. Participant-level inputs and
   outputs (run folders, the optional labels CSV, `participants.csv`) live outside this repo, and the participant

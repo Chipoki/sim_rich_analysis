@@ -4,6 +4,7 @@ End-to-end pipeline. Run with:  python run.py
 `python run.py --lab [--batch NAME ...]` runs the lab experiment's run type
 instead (lab_run.py): the lab participants, pooled over every batch or only
 the named ones, scored against the web pilot this default run caches.
+`--without S3` also scores them without the named participant(s).
 
 Steps:
   1. Parse both result files into one tidy DataFrame.
@@ -508,7 +509,11 @@ if __name__ == "__main__":
     parser.add_argument("--task", metavar="NAME",
                         help="with --lab: only the participants who did this second task (colour-change, letters-count); "
                              "needed when the selected batches hold more than one")
+    parser.add_argument("--without", nargs="+", metavar="ID",
+                        help="with --lab: also score the group without these participants (S3 ...), shown beside the whole group's")
     args = parser.parse_args()
+    if args.without and not args.lab:
+        parser.error("--without takes lab participants out: use it with --lab")
     if args.task and not args.lab:
         parser.error("--task selects lab participants by their second task: use it with --lab")
     if args.batch and not args.lab:
@@ -516,6 +521,6 @@ if __name__ == "__main__":
     if args.lab:
         import lab_run  # here, not at the top: the default run needs none of it
 
-        lab_run.run(args.batch, args.task)
+        lab_run.run(args.batch, args.task, args.without)
     else:
         run()

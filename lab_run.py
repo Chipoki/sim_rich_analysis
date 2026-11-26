@@ -8,6 +8,11 @@ batch folders. Re-run it after each new batch: nothing is recomputed that is
 cached (the model's embeddings and distance vectors do not depend on who was
 run), so a re-run takes seconds.
 
+`--without S<k> ...` also scores the group without the named participants:
+every figure that shows a number of the whole group then shows the same
+number without them, dashed (compute's A["rest"]), the summary sets the two
+side by side, and the results go to <selection>_without-<ids>/.
+
 Writes under config.LAB_RESULTS_DIR/<selection>/ -- `pool`, or the batch
 names joined by `+`:
   summary.md                  the numbers to read first, also printed
@@ -31,7 +36,9 @@ Colours: the Letters / No-Letters pair plus one orange for the lab group
 (validate_palette.js, light, all pairs: all checks pass). Colour marks the
 group only; participants are told apart by labels, text stays in ink. Where
 gated practice is set against the rest (figures 11 to 13), a filled marker
-is a gated participant and a hollow one is not. Figure 13 gathers the five
+is a gated participant and a hollow one is not. A noise ceiling is drawn
+from its lower bound (R_LOO, a triangle pointing down) to its upper bound
+(one pointing up): figures 4, 5, 6 and 15. Figure 13 gathers the five
 panels a one-page summary needs (TAKEAWAY_PANELS: each draws on an axes it is
 given, so a write-up can also place them one by one).
 """
@@ -47,7 +54,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
-from matplotlib.ticker import MaxNLocator  # noqa: E402
+from matplotlib.ticker import MaxNLocator, PercentFormatter  # noqa: E402
 from PIL import Image  # noqa: E402
 
 import analysis  # noqa: E402
@@ -119,17 +126,28 @@ def _cross_r(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 # ----------------------------------------------------------------------------- numbers
 
-def compute(run_dirs: list[Path]) -> dict:
-    """Everything the figures and the summary show, for the participants of `run_dirs` taken as one group."""
+def compute(run_dirs: list[Path], without: tuple | list = ()) -> dict:
+    """Everything the figures and the summary show, for the participants of `run_dirs` taken as one group.
+
+    `without` names participants (S<k>) to take out a second time: A["rest"] is then this same computation for the
+    others (None when nobody is named), which the figures draw beside the whole group's, dashed."""
     pilot = lab.load_pilot()
     index = pilot["pair_index"]
     R, T = lab.load_runs(run_dirs, index)
     n, n_pairs = R.shape[1], len(R)
     if n < 2:
         raise ValueError("agreement between raters needs at least two participants: pool this batch with others")
+    unknown = sorted(set(without) - set(R.columns))
+    if unknown:
+        raise ValueError(f"cannot take out {', '.join(unknown)}: the selected participants are {', '.join(R.columns)}")
     vectors = lab.model_vectors(index)  # outside the silenced block: a first run embeds for minutes and should say so
     with progress.silenced():
-        return _compute(run_dirs, pilot, R, T, vectors)
+        A = _compute(run_dirs, pilot, R, T, vectors)
+    A["without"], A["rest"] = [p for p in A["pids"] if p in without], None
+    if without:
+        ids = lab.participant_ids()
+        A["rest"] = compute([d for d in run_dirs if ids[d] not in without])
+    return A
 
 
 def _compute(run_dirs: list[Path], pilot: dict, R: pd.DataFrame, T: pd.DataFrame, vectors: pd.DataFrame) -> dict:
@@ -153,6 +171,7 @@ def _compute(run_dirs: list[Path], pilot: dict, R: pd.DataFrame, T: pd.DataFrame
         wide = lab.as_wide(G[g], g)
         A["loo"][g] = analysis.leave_one_out_reliability(wide, g)
         A["split"][g] = analysis.split_half_reliability(wide, g)
+    A["ceiling"] = {g: lab.noise_ceiling(G[g]) for g in G}  # per rater: lower (= loo) and upper
     batch_of = T.drop_duplicates("participant").set_index("participant")["batch"]
     A["batch_rbar"] = {b: lab.mean_pairwise_r(R[members]) if len(members) > 1 else np.nan
                        for b, members in ((b, list(batch_of.index[batch_of == b])) for b in A["batches"])}
@@ -182,6 +201,16 @@ def _compute(run_dirs: list[Path], pilot: dict, R: pd.DataFrame, T: pd.DataFrame
     ci = lab.bootstrap_pairs(differences, n_pairs)
     A["contrasts"] = pd.DataFrame([dict(higher=a, lower=b, difference=d, lo=lo, hi=hi)
                                    for (a, b), d, lo, hi in zip(pairs, differences(np.arange(n_pairs)), ci[0], ci[1])])
+    # -- the model against the noise ceiling: its mean r as a share of the lower one, and what the pilot's groups of
+    # the lab group's size show (a ceiling depends on the group's size, so only same-sized groups compare)
+    A["share"] = {g: A["per"][g].mean() / A["ceiling"][g]["lower"].mean() for g in G}
+    A["sub_ceiling"] = {g: lab.subgroup_ceilings(G[g], n, A["per"][g]) for g in A["sub"]}
+
+    def ceiling_and_shares(i):
+        lower, upper = lab.noise_ceiling(R.iloc[i]).mean()
+        return [lower, upper, *(_cross_r(Rm[i], Sm[i]).mean(0) / lower)]
+
+    A["ceiling_ci"] = pd.DataFrame(lab.bootstrap_pairs(ceiling_and_shares, n_pairs), index=["lo", "hi"], columns=["lower", "upper", *levels])
     # the lab's pixels against the pilot's own: the id map's check, and what the two sets' masks change
     web = {lv: distances.get_similarity(pilot["model"], lv, config.DEFAULT_LAYER).loc[R.index] for lv in levels
            if (lv, config.DEFAULT_LAYER, "similarity") in pilot["model"].columns}
@@ -271,6 +300,30 @@ def _mean_line(wide: pd.DataFrame) -> pd.Series:
     return wide.mean(axis=1).where(wide.notna().mean(axis=1) >= 2 / 3)
 
 
+# How the group without the participants taken out (A["rest"]) is drawn beside the whole group: the same mark, dashed.
+DASH = (0, (3.2, 2))
+REST_LINE = dict(color=INK, lw=1.3, ls=DASH, marker="o", ms=4, mfc="white", mec=INK, mew=0.9, zorder=4)
+
+
+def _without(A) -> str:
+    """What a figure calls the group without the participants taken out: "without S3"."""
+    return "without " + ", ".join(A["without"])
+
+
+def _tick(ax, x: float, y: float, half: float, **style) -> None:
+    """A short vertical tick at (x, y): a mean on a row of dots."""
+    ax.plot([x, x], [y - half, y + half], **{"color": INK, "lw": 1.6, "zorder": 4, **style})
+
+
+def _draw_ceiling(ax, x: float, bounds, colour: str, rest: bool = False) -> None:
+    """A group's noise ceiling as a vertical bar at x: from its lower bound (a triangle pointing down) to its
+    upper bound (one pointing up)."""
+    lower, upper = bounds
+    ax.plot([x, x], [lower, upper], color=colour, lw=1.3, ls=DASH if rest else "-", zorder=3)
+    for y, marker in ((lower, "v"), (upper, "^")):
+        ax.scatter([x], [y], marker=marker, s=28, facecolor="white" if rest else colour, edgecolor=colour, linewidth=0.9, zorder=4)
+
+
 def fig_examples(A):
     s, gap, left, top, under = 0.80, 0.17, 1.20, 0.24, 0.40
     levels = A["levels"]
@@ -340,8 +393,9 @@ def fig_agreement(A):
 
 
 def fig_yardstick(A):
-    fig, ax = plt.subplots(figsize=(WIDTH, 2.4))
-    fig.subplots_adjust(left=0.085, right=0.985, top=0.94, bottom=0.29)
+    rest = A["rest"]  # one more key entry, so a second row of them
+    fig, ax = plt.subplots(figsize=(WIDTH, 2.58 if rest else 2.4))
+    fig.subplots_adjust(left=0.085, right=0.985, top=0.94, bottom=0.34 if rest else 0.29)
     bins = np.arange(-0.06, 0.861, 0.02)
     top = 1.0
     for g in lab.PILOT_GROUPS:
@@ -353,6 +407,8 @@ def fig_yardstick(A):
             ax.axvline(A["rbar"][g], color=C[g], lw=1.6, label=f"{NAME[g]}, all {A['sizes'][g]} raters")
     ax.axvspan(*A["rbar_ci"], color=C["lab"], alpha=0.16, lw=0)
     ax.axvline(A["rbar"]["lab"], color=C["lab"], lw=2.2, label="the lab (band: 95% over image pairs)")
+    if rest:  # up to the histograms' top only: the groups' names are written above it
+        ax.plot([rest["rbar"]["lab"]] * 2, [0, top], color=C["lab"], lw=1.5, ls=DASH, label=f"the lab {_without(A)} ({rest['n']} raters)")
     ax.set_ylim(0, top * 1.22)
     where = {g: np.median(A["sub"][g]) if g in A["sub"] else A["rbar"][g] for g in lab.PILOT_GROUPS}
     side = 1 if A["rbar"]["lab"] < where["letters"] else -1  # the Letters label goes on the side away from the lab's line
@@ -363,7 +419,7 @@ def fig_yardstick(A):
     ax.set_xlabel(f"agreement inside a group of {A['n']} raters (mean r between two of them)")
     ax.set_ylabel(f"groups of {A['n']}")
     ax.set_xlim(-0.06, 0.86)
-    fig.legend(loc="lower center", ncol=3, handlelength=1.4, columnspacing=1.4, fontsize=7.2)
+    fig.legend(loc="lower center", ncol=2 if rest else 3, handlelength=1.8 if rest else 1.4, columnspacing=1.4, fontsize=7.2)
     return fig
 
 
@@ -397,20 +453,36 @@ def fig_raters(A):
         v = np.sort(A["cons"][g].to_numpy())
         jitter = ((np.arange(len(v)) % 3) - 1) * 0.13 if g != "lab" or len(v) > MAX_LABELLED else np.zeros(len(v))
         ax.scatter(v, y + jitter, s=58 if g == "lab" else 26, color=C[g], edgecolor="white", linewidth=0.9, zorder=3)
+        _tick(ax, v.mean(), y, 0.24)
+        lower, upper = A["ceiling"][g].mean()  # the row's own group: how well anything can follow its raters
+        ax.plot([lower, upper], [y + 0.38] * 2, color=C[g], lw=1.0, zorder=2)
+        for bound, marker in ((lower, "v"), (upper, "^")):
+            ax.scatter([bound], [y + 0.38], marker=marker, s=28, color=C[g], zorder=3)
+    if A["rest"]:
+        _tick(ax, A["rest"]["cons"]["lab"].mean(), 0, 0.24, ls=DASH, lw=1.3)
+        ax.plot([], [], color=INK, lw=1.3, ls=DASH, label=f"the lab's mean {_without(A)}")
+    ax.plot([], [], ls="none", marker="|", ms=9, mew=1.6, color=INK, label="mean of the row")
+    ax.scatter([], [], marker="v", s=28, color=MUTED, label="the group's lower noise ceiling")
+    ax.scatter([], [], marker="^", s=28, color=MUTED, label="its upper noise ceiling")
+    handles, names = ax.get_legend_handles_labels()
+    key = sorted(range(len(names)), key=lambda k: "without" in names[k])  # the group without: last
+    ax.legend([handles[k] for k in key], [names[k] for k in key], loc="upper left", fontsize=6.8, handlelength=1.6, labelspacing=0.3, borderpad=0.2)
     if A["n"] <= MAX_LABELLED:
         lab_r = A["cons"]["lab"]
         for p, x in zip(lab_r.index, _spread(lab_r.to_numpy(), 0.035)):
             ax.annotate(p, (lab_r[p], 0), xytext=(x, -0.42), ha="center", va="top", fontsize=7.5,
                         arrowprops=dict(arrowstyle="-", color=FAINT, lw=0.5, shrinkA=0, shrinkB=3))
     ax.set_yticks(list(order.values()), ["No-Letters raters", "Letters raters", _group_phrase(A)])
-    ax.set_ylim(-0.85, 2.5), ax.set_xlim(-0.1, 0.95), ax.grid(axis="y", visible=False)
+    ax.set_ylim(-0.85, 2.66), ax.set_xlim(-0.1, 0.95), ax.grid(axis="y", visible=False)
     ax.set_xlabel("r with the No-Letters pilot's mean rating of each pair (its own raters: mean of the others)")
     ax.set_title("b  Each rater against the No-Letters consensus", pad=4)
     return fig
 
 
 def fig_model(A):
-    fig, (a, b) = plt.subplots(1, 2, figsize=(WIDTH, 2.7), sharey=True, gridspec_kw=dict(wspace=0.08, left=0.085, right=0.985, top=0.9, bottom=0.2))
+    rest = A["rest"]
+    fig, (a, b) = plt.subplots(1, 2, figsize=(WIDTH, 3.25), sharey=True, gridspec_kw=dict(
+        width_ratios=[1, 1.22], wspace=0.08, left=0.085, right=0.985, top=0.915, bottom=0.165))
     levels = A["levels"]
     x = np.arange(len(levels))
     per = A["per"]["lab"]
@@ -424,35 +496,58 @@ def fig_model(A):
     mean = per.mean()
     a.errorbar(x, mean, yerr=[mean - A["level_ci"].loc["lo"], A["level_ci"].loc["hi"] - mean], fmt="-o", color=INK, lw=2, ms=5.5,
                capsize=2.5, elinewidth=1, zorder=4, label=f"mean of the {A['n']} (95% over image pairs)")
+    if rest:
+        a.plot(x, rest["per"]["lab"].mean(), **REST_LINE, label=f"mean {_without(A)}")
     a.plot([], [], "-o", color=C["lab"], lw=1.1, ms=4, label="one rater")
+    a.axhspan(*A["ceiling"]["lab"].mean(), color=FAINT, alpha=0.3, lw=0, zorder=0, label=f"noise ceiling of the {A['n']}, lower to upper")
     a.set_title(f"a  {_group_phrase(A).capitalize()}"), a.set_ylabel("r of a rater's ratings with the ResNet")
-    a.set_xlim(-0.3, x[-1] + 0.62), a.legend(loc="upper right", handlelength=1.6)
+    handles, names = a.get_legend_handles_labels()
+    key = sorted(range(len(names)), key=lambda k: ("mean of" not in names[k], "mean" not in names[k], "ceiling" in names[k]))
+    a.set_xlim(-0.3, x[-1] + 0.62), a.legend([handles[k] for k in key], [names[k] for k in key], loc="upper right", handlelength=1.6)
+    ceiling_x = x[-1] + 1.1  # panel b's last column: each group's noise ceiling at its own size
     for g, dx in (("no_letters", -0.2), ("letters", 0.0), ("lab", 0.2)):
         d = A["per"][g]
         for k, lv in enumerate(levels):
             b.scatter(np.full(len(d), k + dx), d[lv], s=11, color=C[g], alpha=0.32, lw=0, zorder=2)
         b.plot(x + dx, d.mean(), "-D", color=C[g], lw=1.6, ms=5, mec="white", mew=0.8, zorder=4, label=f"{NAME[g]} (n = {len(d)})")
-    b.set_title("b  The same model vectors, three groups"), b.set_xlim(-0.45, x[-1] + 0.45)
-    b.legend(loc="upper right", handlelength=1.6, title="mean (diamond) and each rater (dot)", title_fontsize=7.5)
+        _draw_ceiling(b, ceiling_x + dx, A["ceiling"][g].mean(), C[g])
+    if rest:
+        b.plot(x + 0.36, rest["per"]["lab"].mean(), ls=DASH, marker="D", color=C["lab"], lw=1.3, ms=4.5, mfc="white", mec=C["lab"], mew=1.0,
+               zorder=4, label=f"the lab {_without(A)} (n = {rest['n']})")
+        _draw_ceiling(b, ceiling_x + 0.4, rest["ceiling"]["lab"].mean(), C["lab"], rest=True)
+    b.axvline(x[-1] + 0.6, color="#9a9a9a", lw=0.7)
+    b.set_title("b  The same model vectors, three groups"), b.set_xlim(-0.45, ceiling_x + 0.65)
+    b.legend(loc="upper left", handlelength=1.6, title="mean (diamond) and each rater (dot)", title_fontsize=7.5)
     for ax in (a, b):
         ax.set_xticks(x, [level_label(lv) for lv in levels]), ax.axhline(0, color="#9a9a9a", lw=0.7), ax.grid(axis="x", visible=False)
         ax.set_xlabel("what the ResNet was shown")
-    a.set_ylim(-0.14, 0.82)
+    b.set_xticks([*x, ceiling_x], [*(level_label(lv) for lv in levels), "noise ceiling"])
+    left, right = b.get_xlim()
+    b.set_xlabel("what the ResNet was shown", x=(x.mean() - left) / (right - left))  # under the levels, not the whole axis
+    a.set_ylim(-0.14, 1.12)
     return fig
 
 
 def fig_projection(A):
-    fig, (a, b) = plt.subplots(1, 2, figsize=(WIDTH, 2.85), gridspec_kw=dict(wspace=0.27, left=0.085, right=0.985, top=0.91, bottom=0.34))
+    rest = A["rest"]
+    fig, axes = plt.subplots(1, 3, figsize=(WIDTH, 2.75), sharey=True, gridspec_kw=dict(wspace=0.09, left=0.07, right=0.985, top=0.9, bottom=0.36))
     N = np.arange(2, max(41, A["n"] + 6))
-    panels = ((a, lab.expected_loo, {g: A["loo"][g].mean() for g in A["loo"]}, "a  One rater against the rest (R_LOO)"),
-              (b, lab.spearman_brown, A["split"], "b  Reliability of the group mean"))
-    for ax, f, observed, title in panels:
+
+    def measured(X, g):  # one value per panel, at the group's own size
+        return (*X["ceiling"][g].mean(), X["split"][g])
+
+    panels = (("a  Lower ceiling (R_LOO)", lab.expected_loo), ("b  Upper ceiling", lab.expected_upper), ("c  Reliability of the mean", lab.spearman_brown))
+    for k, (ax, (title, f)) in enumerate(zip(axes, panels)):
         for g in ("no_letters", "letters", "lab"):
             ax.plot(N, f(A["rbar"][g], N), color=C[g], lw=2 if g == "lab" else 1.4, label=f"{NAME[g]}: formula")
-            ax.scatter([A["sizes"][g]], [observed[g]], s=46, color=C[g], edgecolor="white", linewidth=1, zorder=4)
+            ax.scatter([A["sizes"][g]], [measured(A, g)[k]], s=46, color=C[g], edgecolor="white", linewidth=1, zorder=4)
         ax.fill_between(N, f(A["rbar_ci"][0], N), f(A["rbar_ci"][1], N), color=C["lab"], alpha=0.15, lw=0)
+        if rest:
+            ax.plot(N, f(rest["rbar"]["lab"], N), color=C["lab"], lw=1.4, ls=DASH, label=f"the lab {_without(A)}: formula")
+            ax.scatter([rest["n"]], [measured(rest, "lab")[k]], s=26, facecolor="white", edgecolor=C["lab"], linewidth=1.1, zorder=5)
         ax.set_title(title), ax.set_xlabel("raters in the group"), ax.set_xlim(2, N[-1]), ax.set_ylim(0, 1)
         ax.set_xticks(sorted({A["n"], A["sizes"]["letters"], 30, 40} | ({10} if abs(A["n"] - 10) > 2 else set())))  # 9 and 10 would touch
+    a = axes[0]
     a.scatter([], [], s=46, color=MUTED, label="measured, at the group's own size")
     a.fill_between([], [], [], color=C["lab"], alpha=0.15, lw=0, label="the lab: 95% over image pairs")
     a.set_ylabel("r")
@@ -466,6 +561,7 @@ def _relation_label(x: str) -> str:
 
 def fig_trial_relations(A):
     rel = A["trial_relations"]
+    rest = A["rest"]["trial_relations"] if A["rest"] else None
     panels = [("rating", "a  What goes with the rating"), ("response time", "b  What goes with the rating's response time")]
     xs = {y: list(dict.fromkeys(rel[rel.y == y].x)) for y, _ in panels}
     H = 0.235 * sum(len(v) for v in xs.values()) + 1.45
@@ -481,6 +577,9 @@ def fig_trial_relations(A):
             jitter = (np.arange(len(v)) % 3 - 1) * 0.16 if len(v) > MAX_LABELLED else np.zeros(len(v))
             ax.scatter(v, row + jitter, s=24, color=C["lab"], alpha=0.85, edgecolor="white", linewidth=0.6, zorder=3)
             ax.scatter([v.mean()], [row], marker="D", s=46, color=INK, edgecolor="white", linewidth=0.8, zorder=4)
+            others = rest[(rest.y == y) & (rest.x == x)].rho.dropna() if rest is not None else []
+            if len(others):
+                _tick(ax, others.mean(), row, 0.36, ls=DASH, lw=1.2)
         ax.axvline(0, color="#9a9a9a", lw=0.8)
         ax.set_yticks(range(len(xs[y])), [_relation_label(x) for x in reversed(xs[y])])
         ax.set_ylim(-0.6, len(xs[y]) - 0.4), ax.set_xlim(-0.8, 0.8), ax.grid(axis="y", visible=False)
@@ -488,12 +587,15 @@ def fig_trial_relations(A):
     axes[-1].set_xlabel("Spearman ρ over one participant's trials")
     axes[0].scatter([], [], s=24, color=C["lab"], label="one participant")
     axes[0].scatter([], [], marker="D", s=46, color=INK, label="their mean")
-    axes[0].legend(loc="lower left", fontsize=7, handletextpad=0.2, borderpad=0.2)
+    if rest is not None:
+        axes[0].plot([], [], color=INK, lw=1.2, ls=DASH, label=f"mean {_without(A)}")
+    axes[0].legend(loc="lower left", fontsize=7, handletextpad=0.2 if rest is None else 0.5, borderpad=0.2)
     return fig
 
 
 def fig_conditions(A):
     cond = A["conditional"]
+    rest = A["rest"]["conditional"] if A["rest"] else None
     fig, axes = plt.subplots(2, 3, figsize=(WIDTH, 4.3), sharey=True, gridspec_kw=dict(wspace=0.1, hspace=0.62, left=0.1, right=0.985, top=0.93, bottom=0.12))
     titles = {condition: CONDITION_TITLES[condition] for condition in A["task"].conditions}  # five, the sixth panel the model's
     for ax, (condition, xlabel), letter in zip(axes.flat, titles.items(), "abcde"):
@@ -502,6 +604,9 @@ def fig_conditions(A):
         x = np.arange(len(wide))
         ax.plot(x, wide.to_numpy(), "-o", color=C["lab"], lw=1.0, ms=3.5, mec="white", mew=0.6, alpha=0.9)
         ax.plot(x, _mean_line(wide), "-o", color=INK, lw=2, ms=5, zorder=4)
+        if rest is not None:
+            others = rest[(rest.condition == condition) & (rest.reference == "consensus")]
+            ax.plot(x, _mean_line(others.pivot(index="level", columns="participant", values="r").reindex(wide.index)), **REST_LINE)
         ax.set_xticks(x, [str(v) for v in wide.index]), ax.set_xlim(-0.4, len(wide) - 0.6), ax.set_xlabel(xlabel)
         ax.set_title(f"{letter}  by {condition}"), ax.axhline(0, color="#9a9a9a", lw=0.7), ax.grid(axis="x", visible=False)
     ax = axes.flat[5]
@@ -517,6 +622,9 @@ def fig_conditions(A):
     axes[0, 0].plot([], [], "-o", color=C["lab"], lw=1.0, ms=3.5, label="one rater")
     axes[0, 0].plot([], [], "-o", color=INK, lw=2, ms=5, label="mean")
     axes[0, 0].legend(loc="lower left", handlelength=1.5, fontsize=7, ncol=2)
+    if rest is not None:  # the first panel's corner is taken: the second one's
+        axes[0, 1].plot([], [], **REST_LINE, label=f"mean {_without(A)}")
+        axes[0, 1].legend(loc="lower left", handlelength=2.2, fontsize=7)
     axes[0, 0].set_ylim(-0.25, 1.0)
     return fig
 
@@ -615,10 +723,16 @@ def _draw_pair_kinds(c, A):
     kinds = [k for k in ("both without", "one of each", "both with") if k in A["group_agreement"]["mean"].index]
     pairs = A["group_agreement"]["pairs"]
     for x, kind in enumerate(kinds):
-        r = np.sort(pairs[pairs.kind == kind].r.to_numpy())
+        of_kind = pairs[pairs.kind == kind].sort_values("r")
+        r = of_kind.r.to_numpy()
+        at = x + (np.arange(len(r)) % 5 - 2) * 0.09
         fill = {"both with": C["lab"], "both without": "white"}.get(kind, ORANGES(0.75))
-        c.scatter(x + (np.arange(len(r)) % 5 - 2) * 0.09, r, s=20, facecolor=fill, edgecolor=C["lab"], linewidth=0.9, zorder=3)
+        c.scatter(at, r, s=20, facecolor=fill, edgecolor=C["lab"], linewidth=0.9, zorder=3)
         c.plot([x - 0.32, x + 0.32], [r.mean()] * 2, color=INK, lw=1.8, zorder=4)
+        out = (of_kind.a.isin(A["without"]) | of_kind.b.isin(A["without"])).to_numpy()
+        if out.any() and not out.all():  # the pairs with a participant taken out, ringed, and the mean of the others
+            c.scatter(at[out], r[out], s=58, facecolor="none", edgecolor=INK, linewidth=0.7, zorder=3.5)
+            c.plot([x - 0.32, x + 0.32], [r[~out].mean()] * 2, color=INK, lw=1.3, ls=DASH, zorder=4)
     counts = pairs.kind.value_counts()
     c.set_xticks(range(len(kinds)), [{"both without": "neither\ngated", "one of each": "one\ngated", "both with": "both\ngated"}[k]
                                      + f"\n({counts[k]})" for k in kinds])
@@ -628,8 +742,10 @@ def _draw_pair_kinds(c, A):
 def fig_practice(A):
     practice, pids = A["practice"], A["pids"]
     n_iter, n_blocks = int(practice.iteration.max()), int(A["blocks"].block.max())
-    fig, (a, b, c) = plt.subplots(1, 3, figsize=(WIDTH, 3.0), gridspec_kw=dict(
-        width_ratios=[n_iter + n_blocks + 1.3, n_iter + 1.6, 4.6], wspace=0.3, left=0.075, right=0.99, top=0.89, bottom=0.31))
+    H = 3.16 if A["rest"] else 3.0  # the group without: a second row of key entries
+    fig, (a, b, c) = plt.subplots(1, 3, figsize=(WIDTH, H), gridspec_kw=dict(
+        width_ratios=[n_iter + n_blocks + 1.3, n_iter + 1.6, 4.6], wspace=0.3, left=0.075, right=0.99,
+        top=0.8956 if A["rest"] else 0.89, bottom=0.345 if A["rest"] else 0.31))
     _draw_clean_course(a, A)
     a.set_title(f"a  {CLEAN_TITLE[A['task'].name]}")
     for p in pids:
@@ -650,16 +766,25 @@ def fig_practice(A):
     a.plot([], [], "-o", color=C["lab"], lw=1.0, ms=4.2, mfc=C["lab"], mec=C["lab"], label="gated practice")
     a.plot([], [], "-o", color=C["lab"], lw=1.0, ms=4.2, mfc="white", mec=C["lab"], label="not gated")
     a.plot([], [], color=MUTED, lw=0.9, ls=(0, (4, 2)), label="the gate's minimum")
+    if A["rest"]:
+        named = ", ".join(A["without"])
+        a.plot([], [], color=INK, lw=1.3, ls=DASH, label=f"c: mean {_without(A)}")
+        a.plot([], [], ls="none", marker="o", ms=7, mfc="none", mec=INK, mew=0.7, label=f"c: a pair with {named}")
     fig.legend(*a.get_legend_handles_labels(), loc="lower center", ncol=5, handlelength=2.0, columnspacing=1.3, fontsize=7.0)
     return fig
 
 
 def fig_groups(A):
     M, gated, contrasts = A["group_measures"], A["gated"], A["group_contrasts"].set_index("measure")
+    rest = A["rest"]  # the group without: two more columns of numbers, a line above their heads, a second row of key entries
+    rest_contrasts = rest["group_contrasts"].set_index("measure") if rest else None
     rows = list(M.columns)
-    H = 0.262 * len(rows) + 1.0
+    H = 0.262 * len(rows) + (1.28 if rest else 1.0)
     fig, ax = plt.subplots(figsize=(WIDTH, H))
-    fig.subplots_adjust(left=0.345, right=0.70, top=1 - 0.3 / H, bottom=0.72 / H)
+    right = 0.615 if rest else 0.70
+    fig.subplots_adjust(left=0.345, right=right, top=1 - (0.44 if rest else 0.3) / H, bottom=(0.86 if rest else 0.72) / H)
+    step = 0.2 * (0.70 - 0.345) / (right - 0.345)  # one column of numbers, in widths of the axes
+    columns = [1.04 + k * step for k in range(5 if rest else 3)]
     if contrasts.empty:  # a blank panel would read as no difference
         ax.text(0.5, 0.5, "every participant of this selection had the same kind of practice:\nnothing to compare",
                 transform=ax.transAxes, ha="center", va="center", fontsize=8, color=MUTED)
@@ -671,15 +796,26 @@ def fig_groups(A):
             z = Z.loc[gated[gated == flag].index, measure].dropna()
             for p, v in z.items():
                 ax.scatter([v], [y + dy], s=20, marker=MARKERS[A["batches"].index(batches[p]) % len(MARKERS)], zorder=3,
-                           facecolor=C["lab"] if flag else "white", edgecolor=C["lab"], linewidth=0.9)
+                           facecolor=C["lab"] if flag else "white", edgecolor=INK if p in A["without"] else C["lab"], linewidth=0.9)
             if len(z):
                 ax.plot([z.mean()] * 2, [y + dy - 0.14, y + dy + 0.14], color=INK, lw=1.6, zorder=4)
+            if rest and len(z) and measure in rest["group_measures"]:  # this camp's mean without them, where it moves
+                others = rest["group_measures"][measure].reindex(z.index).dropna()
+                moved = (others.mean() - M[measure].mean()) / M[measure].std() if len(others) else z.mean()
+                if abs(moved - z.mean()) > 0.03:
+                    _tick(ax, moved, y + dy, 0.21, lw=1.1, ls=(0, (1.7, 1.2)))
         if measure in contrasts.index:
             row = contrasts.loc[measure]
-            for x, text in ((1.04, f"{row['with']:.2f}"), (1.24, f"{row['without']:.2f}"), (1.44, f"{row['p']:.3f}")):
+            texts = [f"{row['with']:.2f}", f"{row['without']:.2f}", f"{row['p']:.3f}"]
+            if rest and measure in rest_contrasts.index:
+                texts += [f"{rest_contrasts.loc[measure, 'without']:.2f}", f"{rest_contrasts.loc[measure, 'p']:.3f}"]
+            for x, text in zip(columns, texts):
                 ax.text(x, y, text, transform=ax.get_yaxis_transform(), va="center", ha="left", fontsize=7.2)
-    for x, text in ((1.04, "gated"), (1.24, "not"), (1.44, "p")):
+    for x, text in zip(columns, ("gated", "not", "p", "not", "p")):
         ax.text(x, len(rows) - 0.42, text, transform=ax.get_yaxis_transform(), va="bottom", ha="left", fontsize=7.2, fontweight="bold")
+    if rest:
+        ax.text(columns[3], len(rows) + 0.2, _without(A), transform=ax.get_yaxis_transform(), va="bottom", ha="left", fontsize=7.2, fontweight="bold")
+        ax.plot([columns[3], columns[4] + 0.75 * step], [len(rows) + 0.13] * 2, transform=ax.get_yaxis_transform(), color=INK, lw=0.6, clip_on=False)
     ax.axvline(0, color="#9a9a9a", lw=0.8)
     ax.set_yticks(range(len(rows)), list(reversed(rows)))
     ax.set_ylim(-0.6, len(rows) - 0.4), ax.set_xlim(-2.9, 2.9), ax.grid(axis="y", visible=False)
@@ -689,7 +825,10 @@ def fig_groups(A):
     ax.plot([], [], color=INK, lw=1.6, label="group mean")
     for b, batch in enumerate(A["batches"] if len(A["batches"]) > 1 else []):
         ax.scatter([], [], s=20, marker=MARKERS[b % len(MARKERS)], facecolor="white", edgecolor=MUTED, label=f"batch {b + 1}")
-    fig.legend(loc="lower center", ncol=6, handletextpad=0.3, columnspacing=1.2, fontsize=7.0)
+    if rest:
+        ax.plot([], [], color=INK, lw=1.1, ls=(0, (1.7, 1.2)), label=f"group mean {_without(A)}")
+        ax.scatter([], [], s=20, facecolor="white", edgecolor=INK, label=", ".join(A["without"]))
+    fig.legend(loc="lower center", ncol=4 if rest else 6, handletextpad=0.3, columnspacing=1.2, fontsize=7.0)
     return fig
 
 
@@ -758,6 +897,8 @@ def _draw_rating_by_task(ax, A):
     for p in by.index:
         ax.plot(x, by.loc[p], "-o", color=C["lab"], lw=0.8, ms=3.2, alpha=0.9, **_marker(A, p))
     ax.plot(x, by.mean(), "-o", color=INK, lw=2, ms=4.5, zorder=4, label="mean")
+    if A["rest"]:
+        ax.plot(x, A["rest"]["rating_by_changes"].mean().reindex(by.columns), **REST_LINE, label=f"lab mean {_without(A)}")
     ax.plot([], [], "-o", color=C["lab"], lw=0.8, ms=3.2, mfc=C["lab"], mec=C["lab"], label="one lab rater")
     load = A["task"].load_names  # "no change" ..., or "target on neither" ...: the last word on a line of its own
     ax.set_xticks([*ticks, *x], [*names, *("\n".join(load.get(k, str(k)).rsplit(" ", 1)) for k in by.columns)])
@@ -772,6 +913,7 @@ TAKEAWAY_PANELS = {"agreement": _draw_agreement_levels, "pairs": _draw_pair_kind
 def fig_rating_shifts(A):
     shifts = pd.concat([A["letter_shift"].to_frame().T, A["rating_shifts"]], ignore_index=True)
     shifts = shifts[shifts.participants > 0].reset_index(drop=True)
+    rest = A["rest"]["rating_shifts"].set_index("contrast") if A["rest"] else None
     H = 0.37 * len(shifts) + 1.05
     fig, (a, b) = plt.subplots(1, 2, figsize=(WIDTH, H), gridspec_kw=dict(width_ratios=[2.25, 1.3], wspace=1.12, left=0.07, right=0.925,
                                                                           top=1 - 0.3 / H, bottom=0.72 / H))
@@ -786,6 +928,8 @@ def fig_rating_shifts(A):
         if row.highest > limit:
             b.annotate(f"to {row.highest:+.1f}", (limit, y), xytext=(-2, 5), textcoords="offset points", ha="right", va="bottom", fontsize=6.5, color=MUTED)
         b.scatter([row.difference], [y], marker="D", s=34, color=INK, edgecolor="white", linewidth=0.7, zorder=4)
+        if rest is not None and row.contrast in rest.index and rest.loc[row.contrast, "participants"] > 0:
+            _tick(b, rest.loc[row.contrast, "difference"], y, 0.3, ls=DASH, lw=1.2)
         b.text(1.04, y, "<0.001" if row.p < 0.0005 else f"{row.p:.3f}", transform=b.get_yaxis_transform(), va="center", ha="left", fontsize=7.2)
     b.text(1.04, len(shifts) - 0.5, "p", transform=b.get_yaxis_transform(), va="center", ha="left", fontsize=7.2, fontweight="bold")
     b.axvline(0, color="#9a9a9a", lw=0.8)
@@ -793,6 +937,61 @@ def fig_rating_shifts(A):
     b.set_ylim(-0.6, len(shifts) - 0.4), b.set_xlim(-0.8, limit), b.grid(axis="y", visible=False)
     b.set_xlabel("first kind minus second,\nin rating points")
     b.set_title("b  Shifts in the rating")
+    return fig
+
+
+def fig_ceilings(A):
+    """a: each group's noise ceiling, the pilot's at the lab group's size; b: the model's mean r as a share of the
+    lower ceiling of the very raters it was scored on."""
+    rest, levels, n, sub = A["rest"], A["levels"], A["n"], A["sub_ceiling"]
+    fig, (a, b) = plt.subplots(1, 2, figsize=(WIDTH, 3.1), gridspec_kw=dict(width_ratios=[1.2, 1.3], wspace=0.24, left=0.085, right=0.985, top=0.905, bottom=0.34))
+    bounds = (("lower", "v", -0.14), ("upper", "^", 0.14))
+    names = []
+    for k, g in enumerate(("no_letters", "letters")):
+        for column, marker, dx in bounds:
+            middle = A["ceiling"][g][column].mean()
+            if g in sub:  # the pilot's groups of the lab group's size: their middle 90% and their median
+                low, middle, high = np.percentile(sub[g][column], [5, 50, 95])
+                a.plot([k + dx] * 2, [low, high], color=C[g], lw=6, alpha=0.3, solid_capstyle="butt")
+            a.scatter([k + dx], [middle], marker=marker, s=44, color=C[g], edgecolor="white", linewidth=0.8, zorder=3)
+        names.append(NAME[g].split()[0] + (f"\n(any {n})" if g in sub else f"\n(all {A['sizes'][g]})"))
+    for column, marker, dx in bounds:
+        value, ci = A["ceiling"]["lab"][column].mean(), A["ceiling_ci"][column]
+        a.errorbar([2 + dx], [value], yerr=[[value - ci["lo"]], [ci["hi"] - value]], fmt="none", ecolor=C["lab"], elinewidth=1, capsize=2.5, zorder=2)
+        a.scatter([2 + dx], [value], marker=marker, s=44, color=C["lab"], edgecolor="white", linewidth=0.8, zorder=3)
+        if rest:
+            a.scatter([3 + dx], [rest["ceiling"]["lab"][column].mean()], marker=marker, s=40, facecolor="white", edgecolor=C["lab"], linewidth=1.1, zorder=3)
+    names += [_group_phrase(A), *([f"{_without(A)}\n({rest['n']})"] if rest else [])]
+    a.set_xticks(range(len(names)), names), a.set_xlim(-0.55, len(names) - 0.45), a.set_ylim(0, 1), a.grid(axis="x", visible=False)
+    a.set_ylabel("r of a rater with the group's mean rating"), a.set_title("a  The noise ceiling")
+    x = np.arange(len(levels))
+    for g, dx in (("no_letters", -0.26), ("letters", -0.09)):
+        middle = A["share"][g][levels].to_numpy()
+        if g in sub:
+            low, middle, high = np.percentile(sub[g][levels].div(sub[g]["lower"], axis=0), [5, 50, 95], axis=0)
+            for k in x:
+                b.plot([k + dx] * 2, [low[k], high[k]], color=C[g], lw=6, alpha=0.3, solid_capstyle="butt")
+        b.plot(x + dx, middle, "D", color=C[g], ms=5.5, mec="white", mew=0.8, zorder=3)
+    share, ci = A["share"]["lab"][levels], A["ceiling_ci"][levels]
+    b.errorbar(x + 0.09, share, yerr=[share - ci.loc["lo"], ci.loc["hi"] - share], fmt="D", color=C["lab"], ms=5.5, mec="white", mew=0.8,
+               capsize=2.5, elinewidth=1, zorder=4)
+    if rest:
+        b.plot(x + 0.26, rest["share"]["lab"][levels], "D", ms=5, mfc="white", mec=C["lab"], mew=1.1, zorder=4)
+    b.axhline(1, color="#9a9a9a", lw=0.8)
+    b.annotate("the lower ceiling itself", (x[-1] + 0.42, 1), xytext=(0, 3), textcoords="offset points", ha="right", va="bottom", fontsize=7, color=MUTED)
+    b.set_xticks(x, [level_label(lv) for lv in levels]), b.set_xlim(-0.5, x[-1] + 0.5), b.grid(axis="x", visible=False)
+    b.set_ylim(0, max(1.3, b.get_ylim()[1])), b.set_xlabel("what the ResNet was shown")
+    b.yaxis.set_major_formatter(PercentFormatter(1, decimals=0))
+    b.set_ylabel("mean r with the ResNet,\nas a share of the lower ceiling"), b.set_title("b  The ResNet against the lower ceiling")
+    key = [(plt.Line2D([], [], ls="none", marker="s", ms=6, color=C[g]),
+            f"{NAME[g]}: groups of {n} (median, middle 90%)" if g in sub else f"{NAME[g]}: all {A['sizes'][g]} raters")
+           for g in ("no_letters", "letters")]
+    key.append((plt.Line2D([], [], ls="none", marker="s", ms=6, color=C["lab"]), f"{_group_phrase(A)} (95% over image pairs)"))
+    if rest:
+        key.append((plt.Line2D([], [], ls="none", marker="s", ms=6, mfc="white", mec=C["lab"], mew=1.1), f"the lab {_without(A)} ({rest['n']} raters)"))
+    key += [(plt.Line2D([], [], ls="none", marker="v", ms=6, color=MUTED), "lower ceiling: a rater against the others' mean (R_LOO)"),
+            (plt.Line2D([], [], ls="none", marker="^", ms=6, color=MUTED), "upper ceiling: a rater against the mean of all")]
+    fig.legend(*zip(*key), loc="lower center", ncol=2, fontsize=7.0, handletextpad=0.3, columnspacing=1.6)
     return fig
 
 
@@ -816,6 +1015,7 @@ FIGURES = {
     "5_model": fig_model, "6_projection": fig_projection, "7_trial_relations": fig_trial_relations,
     "8_conditions": fig_conditions, "9_response_times": fig_response_times, "10_participants": fig_participants,
     "11_practice": fig_practice, "12_groups": fig_groups, "13_takeaways": fig_takeaways, "14_rating_shifts": fig_rating_shifts,
+    "15_ceilings": fig_ceilings,
 }
 
 
@@ -845,6 +1045,30 @@ def consistent_relations(A: dict, floor: float = 0.1) -> pd.DataFrame:
     return table[same_sign & (table["mean rho"].abs() >= floor)].sort_values("mean rho", key=np.abs, ascending=False)
 
 
+def _summary_without(A: dict) -> list[str]:
+    """The summary's lines on the group without the participants taken out: each headline number, with them and without."""
+    B, levels = A["rest"], A["levels"]
+    rows = [("mean r between two raters", lambda X: X["rbar"]["lab"]),
+            ("noise ceiling, lower (R_LOO)", lambda X: X["ceiling"]["lab"]["lower"].mean()),
+            ("noise ceiling, upper", lambda X: X["ceiling"]["lab"]["upper"].mean()),
+            ("mean r with the No-Letters consensus", lambda X: X["cons"]["lab"].mean()),
+            ("the group's mean rating against that consensus", lambda X: X["mean_vs_pilot"]["no_letters"]),
+            *((f"mean r with the ResNet, {level_label(lv)}", lambda X, lv=lv: X["per"]["lab"][lv].mean()) for lv in levels),
+            *((f"  as a share of the lower ceiling, {level_label(lv)}", lambda X, lv=lv: X["share"]["lab"][lv]) for lv in levels),
+            *((f"ResNet: {level_label(c.higher)} minus {level_label(c.lower)}", lambda X, k=k: X["contrasts"].difference[k])
+              for k, c in enumerate(A["contrasts"].itertuples()))]
+    out = [f"## W{_without(A)[1:]} (N = {B['n']}): the same numbers for the others",
+           f"{'':<50}{'all ' + str(A['n']):>8}{_without(A):>14}"]
+    out += [f"{name:<50}{f(A):>8.2f}{f(B):>14.2f}" for name, f in rows]
+    if len(B["group_contrasts"]):
+        ga, gb = A["group_agreement"], B["group_agreement"]
+        out += ["- two raters' r, " + ", ".join(f"{kind} {gb['mean'][kind]:.2f} (all: {ga['mean'][kind]:.2f})" for kind in gb["mean"].index)
+                + f"; same group against one of each: p = {gb['p_between']:.3f} (all: {ga['p_between']:.3f})",
+                f"- gated practice against the rest, {_without(A)}:",
+                B["group_contrasts"].round(3).to_string(index=False)]
+    return out
+
+
 def summary(A: dict, selection: str) -> str:
     def r(x):
         return f"{x:.2f}"
@@ -866,6 +1090,15 @@ def summary(A: dict, selection: str) -> str:
             f"reliability of the mean {r(float(lab.spearman_brown(A['rbar']['lab'], size)))}",
             f"- the group's mean rating against the pilot's: r = {r(A['mean_vs_pilot']['no_letters'])} (No-Letters), "
             f"{r(A['mean_vs_pilot']['letters'])} (Letters); the two pilot groups against each other: {r(A['pilot_vs_pilot'])}"]
+
+    out += ["", "## The noise ceiling (a rater against the mean of the others: lower, R_LOO; against the mean of all: upper)",
+            f"{'group':<18}{'N':>3}{'lower':>7}{'upper':>7}   the ResNet's mean r as a share of the lower, by level"]
+    out += [f"{NAME[g]:<18}{A['sizes'][g]:>3}{r(A['ceiling'][g]['lower'].mean()):>7}{r(A['ceiling'][g]['upper'].mean()):>7}   "
+            + ", ".join(f"{level_label(lv)} {r(A['share'][g][lv])}" for lv in levels) for g in ("lab", *lab.PILOT_GROUPS)]
+    for g, sub in A["sub_ceiling"].items():  # median (5th to 95th percentile) over the pilot's groups of the lab group's size
+        spans = {name: np.percentile(v, [50, 5, 95]) for name, v in (("lower", sub["lower"]), ("upper", sub["upper"]),
+                 *((level_label(lv), sub[lv] / sub["lower"]) for lv in levels))}
+        out += [f"- groups of {n} from the {NAME[g]}: " + "; ".join(f"{name} {r(m)} ({r(lo)} to {r(hi)})" for name, (m, lo, hi) in spans.items())]
 
     out += ["", f"## The ResNet ({config.DEFAULT_LAYER}): mean r of a rater with the model",
             f"{'level':<14}{'lab':>6}  {'95% over pairs':<16}{'Letters':>8}{'No-Letters':>12}{'lab mean rating':>17}"]
@@ -912,6 +1145,9 @@ def summary(A: dict, selection: str) -> str:
         out += ["", "## Across participants (Spearman rho; p by shuffling, uncorrected)",
                 A["participant_relations"].to_string(index=False, float_format=lambda x: f"{x:.2f}")]
 
+    if A["rest"]:
+        out += ["", *_summary_without(A)]
+
     hidden = ("trials", "rating sd", "batch", "serial", "age", "gender", "dominant_hand", "dominant_eye", "practice gated",
               "practice attention (first)", "practice rating (first)", f"{A['task'].correct} (block 1)", "r with consensus (block 1)",
               "said noticed", "noticed when told", "picked the altered image")
@@ -925,19 +1161,22 @@ def summary(A: dict, selection: str) -> str:
     return "\n".join(out)
 
 
-def run(batches: list[str] | None = None, task: str | None = None) -> dict:
+def run(batches: list[str] | None = None, task: str | None = None, without: list[str] | None = None) -> dict:
     """The run type's entry point: compute, write the summary, tables and figures, print the summary.
 
     `task` (lab.TASKS) picks the participants who did that second task; it is needed only when the selected batches
     hold more than one, and then the results folder carries its name, so that one task's results never overwrite
-    another's."""
+    another's. `without` (participant ids) also scores the group without them (compute): the tables stay the whole
+    group's, the figures and the summary show both, and the results go to a folder that names who was taken out."""
     selection = "+".join(batches) if batches else "pool"
     runs = lab.find_runs(batches, task)
     if len(set(lab.run_tasks(batches).values())) > 1:
         selection += f"_{task}"
+    if without:
+        selection += "_without-" + "-".join(without)
+    A = compute(runs, without or ())
     out = config.LAB_RESULTS_DIR / selection
     out.mkdir(parents=True, exist_ok=True)
-    A = compute(runs)
     A["participants"].to_csv(out / "participants.csv")
     A["rating_shifts"].to_csv(out / "rating_shifts.csv", index=False)
     A["letter_shift"].to_frame().T.to_csv(out / "rating_shifts.csv", index=False, header=False, mode="a")

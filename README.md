@@ -99,6 +99,7 @@ popping up GUI windows.
 python run.py --lab                                       # every batch, pooled
 python run.py --lab --batch participants_1_to_4_221126    # only the named batch folder(s)
 python run.py --lab --task letters-count                 # only the participants who did that second task
+python run.py --lab --without S3                          # also scores the group without the named participant(s)
 ```
 
 Participants who did different second tasks are not one group. A run's task is read from its first main trial
@@ -108,6 +109,12 @@ both is refused until `--task` names one, and its results then go to `<selection
 the two is in one place, `lab.TASKS`: the per-trial variables, the conditions, the rating shifts (for the letters,
 first of all the pilot's own bias, the same letter on both images against different letters) and the task's
 per-participant measures.
+
+`--without S<k> ...` asks "how much of the group's numbers is this participant?". The whole group is scored as
+always, and the same computation is run again for the others (`lab_run.compute`'s `A["rest"]`): every figure
+that shows a number of the whole group draws that number without them beside it, dashed, the summary sets the
+two side by side, and the results go to `<selection>_without-<ids>/`, so the selection's own are not
+overwritten. The tables (`*.csv`) stay the whole group's. It is a what-if, not an exclusion rule.
 
 Scores the lab experiment's participants the way the web pilot was scored,
 with the pilot as yardstick (so run the default `python run.py` once first:
@@ -140,7 +147,7 @@ joined by `+`): `summary.md` (also printed), `participants.csv`,
 `trial_relations.csv`, `conditional_agreement.csv`, `subset_contrasts.csv`,
 `response_times.csv`, `practice.csv`, `blocks.csv`, `group_contrasts.csv`,
 `rating_shifts.csv`, `participant_relations.csv` and `diagrams/*.png`
-(figure 13 gathers the panels of a one-page summary). Caches shared by every selection sit in
+(figure 13 gathers the panels of a one-page summary, figure 15 is the noise ceiling). Caches shared by every selection sit in
 `lab_analysis_results/data/`.
 
 What it reports:
@@ -152,6 +159,16 @@ What it reports:
   by two formulas.
 - **The model at each level**, per rater, with intervals from resampling the
   image pairs (raters held fixed), and the pilot groups on the same vectors.
+- **The noise ceiling**, lower and upper (`lab.noise_ceiling`): a rater
+  against the mean of the others (R_LOO) and against the mean of all, the
+  rater included. Both depend on the group's size, so the pilot's are scored
+  again in groups of the lab group's size (`lab.subgroup_ceilings`, on the
+  very subgroups the agreement is scored on), and the model's mean r is given
+  as a share of the lower ceiling of the raters it was scored on, with an
+  interval over image pairs for the lab. A noisy group's lower ceiling is
+  low, which makes its share high: compare shares between same-sized groups
+  only, and read them beside the upper ceiling. `lab.expected_upper` is the
+  upper ceiling's formula, next to `lab.expected_loo`.
 - **Relations**, a fixed set: per trial, the rating and its response time
   against trial number, the pilot's ratings of the pair, the model's
   similarity at each level and the colour-change task; agreement recomputed

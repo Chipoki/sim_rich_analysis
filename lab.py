@@ -17,7 +17,9 @@ adds what lab data needs before and beyond that:
     embeddings.py / distances.py, cached apart from the web set's.
   - agreement statistics that do not depend on group size -- the lab pool
     grows batch by batch, so R_LOO alone cannot be compared across runs --
-    and the two formulas that carry them to any group size.
+    and the formulas that carry them to any group size.
+  - the noise ceiling, lower (R_LOO) and upper (noise_ceiling), and the
+    pilot's at the lab group's own size (subgroup_ceilings).
   - relations: a fixed set of per-trial and within-condition checks of what
     goes with a rating and with its response time.
   - groups: participants whose practice was gated (scored, and repeated when
@@ -559,20 +561,62 @@ def mean_pairwise_r(group: pd.DataFrame) -> float:
     return float(c[np.triu_indices_from(c, k=1)].mean())
 
 
+def _subgroup_members(n: int, k: int, max_groups: int | None = None, seed: int = config.LAB_BOOTSTRAP_SEED) -> np.ndarray:
+    """The k-rater subgroups of n raters, one row of rater positions each: every subgroup while there are at most
+    `max_groups` (default config.LAB_MAX_SUBGROUPS), else that many drawn at random."""
+    max_groups = config.LAB_MAX_SUBGROUPS if max_groups is None else max_groups
+    if comb(n, k) <= max_groups:
+        members = list(combinations(range(n), k))
+    else:
+        rng = np.random.default_rng(seed)
+        members = [rng.choice(n, k, replace=False) for _ in range(max_groups)]
+    return np.array(members, dtype=int).reshape(-1, k)
+
+
 def subgroup_agreement(group: pd.DataFrame, k: int, max_groups: int | None = None, seed: int = config.LAB_BOOTSTRAP_SEED) -> np.ndarray:
     """mean_pairwise_r of the k-rater subgroups of `group`: what a group of k shows by chance of who came.
 
     Every subgroup while there are at most `max_groups` (default config.LAB_MAX_SUBGROUPS), else that many drawn at random.
     """
     c = group.corr().to_numpy()
-    n, upper = c.shape[0], np.triu_indices(k, k=1)
-    max_groups = config.LAB_MAX_SUBGROUPS if max_groups is None else max_groups
-    if comb(n, k) <= max_groups:
-        members = combinations(range(n), k)
-    else:
-        rng = np.random.default_rng(seed)
-        members = (rng.choice(n, k, replace=False) for _ in range(max_groups))
-    return np.array([c[np.ix_(m, m)][upper].mean() for m in members])
+    upper = np.triu_indices(k, k=1)
+    return np.array([c[np.ix_(m, m)][upper].mean() for m in _subgroup_members(c.shape[0], k, max_groups, seed)])
+
+
+def _ceilings(cov: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """noise_ceiling's (lower, upper) per rater from the raters' covariance matrix, one group's (k x k) or a stack
+    of them (groups x k x k): r of each rater with the sum of the others, and with the sum of all."""
+    own, with_all = np.diagonal(cov, axis1=-2, axis2=-1), cov.sum(axis=-1)
+    total = cov.sum(axis=(-2, -1))[..., None]
+    return (with_all - own) / np.sqrt(own * (total - 2 * with_all + own)), with_all / np.sqrt(own * total)
+
+
+def noise_ceiling(group: pd.DataFrame) -> pd.DataFrame:
+    """The two bounds on how well one vector can follow a group's raters, per rater: `lower`, the rater against the
+    mean rating of the others (analysis.leave_one_out_reliability, the report's R_LOO), and `upper`, against the
+    mean rating of all, the rater included. A group's noise ceiling is their means over its raters.
+
+    Both depend on the group's size, the lower one more, so two groups' ceilings are compared at one size
+    (subgroup_ceilings) or through the formulas (expected_loo, expected_upper)."""
+    lower, upper = _ceilings(group.cov().to_numpy())
+    return pd.DataFrame({"lower": lower, "upper": upper}, index=group.columns)
+
+
+def subgroup_ceilings(group: pd.DataFrame, k: int, measures: pd.DataFrame | None = None, max_groups: int | None = None,
+                      seed: int = config.LAB_BOOTSTRAP_SEED) -> pd.DataFrame:
+    """The noise_ceiling of the k-rater subgroups of `group`, which are subgroup_agreement's and in its order.
+
+    One row per subgroup: its `lower` and `upper` (means over its raters) and, for each column of `measures` (one
+    value per rater of `group`, e.g. r with the model at a level), the mean over the subgroup's raters -- so that a
+    fit can be set against the ceiling of the very raters it was scored on.
+    """
+    members = _subgroup_members(group.shape[1], k, max_groups, seed)
+    cov = group.cov().to_numpy()
+    lower, upper = _ceilings(cov[members[:, :, None], members[:, None, :]])
+    out = pd.DataFrame({"lower": lower.mean(axis=1), "upper": upper.mean(axis=1)})
+    for name in ([] if measures is None else measures.columns):
+        out[name] = measures[name].reindex(group.columns).to_numpy()[members].mean(axis=1)
+    return out
 
 
 def spearman_brown(r: float, k) -> np.ndarray:
@@ -585,6 +629,12 @@ def expected_loo(r: float, n) -> np.ndarray:
     """Expected leave-one-out r (one rater against the mean of the other n-1) at single-rater agreement r."""
     k = np.asarray(n, float) - 1
     return r * np.sqrt(k / (1 + (k - 1) * r))
+
+
+def expected_upper(r: float, n) -> np.ndarray:
+    """Expected upper noise ceiling (one rater against the mean of all n, the rater included) at single-rater agreement r."""
+    n = np.asarray(n, float)
+    return np.sqrt((1 + (n - 1) * r) / n)
 
 
 def per_rater_r(group: pd.DataFrame, reference: pd.Series) -> pd.Series:

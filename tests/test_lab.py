@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 from PIL import Image
 
+import analysis
 import config
 import distances
 import embeddings
@@ -313,6 +314,44 @@ def test_projection_formulas_at_their_known_points():
     assert lab.spearman_brown(0.3, 1) == pytest.approx(0.3)
     assert lab.expected_loo(0.3, 2) == pytest.approx(0.3)  # one rater against one other
     assert lab.expected_loo(0.25, 10 ** 9) == pytest.approx(0.5, abs=1e-4)  # against a noise-free mean: sqrt(r)
+    assert lab.expected_upper(0.3, 1) == pytest.approx(1)  # one rater against that rater
+    assert lab.expected_upper(0.3, 2) == pytest.approx(np.sqrt(0.65))
+    assert lab.expected_upper(0.25, 10 ** 9) == pytest.approx(0.5, abs=1e-4)  # one rater no longer weighs in the mean
+
+
+def test_the_noise_ceiling_scores_a_rater_against_the_others_and_against_all():
+    rng = np.random.default_rng(0)
+    base = rng.normal(size=4000)
+    group = pd.DataFrame({k: base + (1 + i) * rng.normal(size=4000) for i, k in enumerate("abcde")})  # raters of unequal noise
+    ceiling = lab.noise_ceiling(group)
+    for k in group:
+        assert ceiling.loc[k, "lower"] == pytest.approx(np.corrcoef(group[k], group.drop(columns=k).mean(axis=1))[0, 1])
+        assert ceiling.loc[k, "upper"] == pytest.approx(np.corrcoef(group[k], group.mean(axis=1))[0, 1])
+    assert (ceiling.upper > ceiling.lower).all()  # the mean of all holds the rater's own noise
+    with progress.silenced():  # the lower bound is the report's R_LOO
+        assert ceiling.lower.to_numpy() == pytest.approx(analysis.leave_one_out_reliability(lab.as_wide(group, "g"), "g").to_numpy())
+    assert lab.noise_ceiling(pd.DataFrame({"a": base, "b": base})).to_numpy() == pytest.approx(1)
+    alike = pd.DataFrame({k: base + rng.normal(size=4000) for k in "abcdef"})  # equal noise: what the two formulas assume
+    rbar, measured = lab.mean_pairwise_r(alike), lab.noise_ceiling(alike).mean()
+    assert measured.lower == pytest.approx(lab.expected_loo(rbar, 6), abs=0.01) and measured.upper == pytest.approx(lab.expected_upper(rbar, 6), abs=0.01)
+
+
+def test_subgroup_ceilings_score_each_subgroup_alone_on_subgroup_agreement_s_own_subgroups():
+    rng = np.random.default_rng(1)
+    base = rng.normal(size=300)
+    group = pd.DataFrame({k: base + (1 + i) * rng.normal(size=300) for i, k in enumerate("abcde")})
+    member = pd.DataFrame(np.eye(5), index=group.columns, columns=group.columns)  # one measure per rater: 1 for that rater alone
+    for max_groups in (None, 4):  # all ten subgroups of three, then four of them drawn at random
+        sub = lab.subgroup_ceilings(group, 3, member.iloc[::-1], max_groups=max_groups)  # the measures' rows in another order
+        agreement = lab.subgroup_agreement(group, 3, max_groups=max_groups)
+        assert len(sub) == len(agreement) == (4 if max_groups else 10)
+        for k, row in sub.iterrows():
+            who = [c for c in group if row[c] > 0]
+            assert len(who) == 3 and row[who].tolist() == pytest.approx([1 / 3] * 3)  # a measure's mean over the subgroup's raters
+            alone = lab.noise_ceiling(group[who]).mean()
+            assert (row.lower, row.upper) == pytest.approx((alone.lower, alone.upper))
+            assert agreement[k] == pytest.approx(lab.mean_pairwise_r(group[who]))  # the same subgroup, row for row
+    assert list(lab.subgroup_ceilings(group, 3).columns) == ["lower", "upper"]
 
 
 def test_bootstrap_interval_brackets_the_statistic_for_scalars_and_vectors():
@@ -596,11 +635,111 @@ def test_lab_run_end_to_end_smoke_pooled_then_one_batch(lab_env):
     assert A["letter_shift"].participants == 0 and "Does anything but the pair move the rating?" in text  # no raw pilot file here
     assert set(A["sequence"]["per"].index) == set(A["pids"]) and A["order_agreement"]["pairs"] == 15
     assert A["rbar_changed"] != pytest.approx(A["rbar"]["lab"])  # agreement over the pairs both raters saw with a change only
+    # the noise ceiling: its lower bound is R_LOO, and the model's fit is given as a share of it
+    assert A["ceiling"]["lab"].lower.to_numpy() == pytest.approx(A["loo"]["lab"].to_numpy()) and A["sub_ceiling"] == {}
+    assert A["share"]["lab"].to_numpy() == pytest.approx((A["per"]["lab"].mean() / A["loo"]["lab"].mean()).to_numpy())
+    assert A["ceiling_ci"].loc["lo", "lower"] <= A["loo"]["lab"].mean() <= A["ceiling_ci"].loc["hi", "lower"]
+    assert list(A["ceiling_ci"].columns) == ["lower", "upper", *LEVELS] and "## The noise ceiling" in text
+    ratings, model = A["ratings"], A["refs"]["model Full"].to_numpy()
+
+    def share_at_full(i):  # on resampled pairs: the model's mean r over the lower ceiling of the same resample
+        return np.mean([np.corrcoef(ratings.iloc[i][p], model[i])[0, 1] for p in ratings]) / lab.noise_ceiling(ratings.iloc[i]).lower.mean()
+
+    assert A["ceiling_ci"]["Full"].to_numpy() == pytest.approx(lab.bootstrap_pairs(share_at_full, len(ratings)))
+    assert A["rest"] is None and A["without"] == [] and "## Without" not in text  # nobody was taken out
 
     B = lab_run.run(["batch_b"])
     assert B["pids"] == ["S4", "S5", "S6"] and set(B["sub"]) == set(lab.PILOT_GROUPS)  # 3 raters: groups of 3 from the pilot
+    sub = B["sub_ceiling"]["letters"]  # every three of the pilot's five: their ceiling, and the model's fit of those three
+    assert len(sub) == 10 and list(sub.columns) == ["lower", "upper", *LEVELS] and (sub.upper > sub.lower).all()
+    assert sub["Full"].mean() == pytest.approx(B["per"]["letters"]["Full"].mean())  # every rater is in six of the ten
+    assert "groups of 3 from the Letters pilot: lower" in (config.LAB_RESULTS_DIR / "batch_b" / "summary.md").read_text()
     assert (config.LAB_RESULTS_DIR / "batch_b" / "diagrams" / "3_yardstick.png").exists()
     assert B["group_contrasts"].empty and (config.LAB_RESULTS_DIR / "batch_b" / "diagrams" / "12_groups.png").exists()  # all gated
+
+
+def _key(fig) -> list[str]:
+    """Every entry of every key (legend) in a figure."""
+    legends = [*fig.legends, *(ax.get_legend() for ax in fig.axes if ax.get_legend())]
+    return [text.get_text() for legend in legends for text in legend.get_texts()]
+
+
+def _lines(fig, x=None, y=None) -> int:
+    """How many of a figure's lines run through exactly these x or y values."""
+    def same(data, wanted):
+        data, wanted = np.asarray(data, float), np.asarray(wanted, float)
+        return data.shape == wanted.shape and np.allclose(data, wanted, equal_nan=True)
+
+    return sum((x is None or same(line.get_xdata(), x)) and (y is None or same(line.get_ydata(), y))
+               for ax in fig.axes for line in ax.lines)
+
+
+def _points(fig, y=None, x=None) -> int:
+    """How many of a figure's single scattered markers sit at exactly this height (or this x)."""
+    at, value = (1, y) if x is None else (0, x)
+    return sum(len(c.get_offsets()) == 1 and np.isclose(c.get_offsets()[0][at], value) for ax in fig.axes for c in ax.collections)
+
+
+def test_lab_run_also_scores_the_group_without_the_named_participants(lab_env):
+    runs, write_run = lab_env
+    for serial in (1, 2, 3, 4, 5):  # S1 to S3 practised once, S4 and S5 had a gated practice
+        write_run("batch_a", serial, gated=serial > 3)
+    whole = lab_run.compute(lab.find_runs())
+    A = lab_run.run(without=["S2"])
+    rest, others = A["rest"], A["ratings"].drop(columns="S2")
+    assert A["pids"] == ["S1", "S2", "S3", "S4", "S5"] and A["without"] == ["S2"] and rest["pids"] == ["S1", "S3", "S4", "S5"]
+    assert A["rbar"]["lab"] == pytest.approx(whole["rbar"]["lab"]) and A["group_contrasts"].equals(whole["group_contrasts"])  # the whole group's stay
+    assert rest["rbar"]["lab"] == pytest.approx(lab.mean_pairwise_r(others)) != pytest.approx(A["rbar"]["lab"])
+    assert rest["ceiling"]["lab"].lower.to_numpy() == pytest.approx(lab.noise_ceiling(others).lower.to_numpy())
+    assert rest["gated"].tolist() == [False, False, True, True] and len(rest["group_contrasts"])  # two against two, compared again
+    assert rest["rest"] is None and set(rest["sub"]) == set(lab.PILOT_GROUPS) and A["sub"] == {}  # four raters: the pilot's groups of four
+
+    out = config.LAB_RESULTS_DIR / "pool_without-S2"  # a folder of its own: the pool's results are not overwritten
+    assert {p.name for p in (out / "diagrams").iterdir()} == {f"{name}.png" for name in lab_run.FIGURES}
+    assert not (config.LAB_RESULTS_DIR / "pool").exists() and len(pd.read_csv(out / "participants.csv")) == 5  # tables: the whole group's
+    text = (out / "summary.md").read_text()
+    assert "## Without S2 (N = 4)" in text and f"{A['rbar']['lab']:>8.2f}{rest['rbar']['lab']:>14.2f}" in text
+    assert "## Without" not in lab_run.summary(whole, "pool")
+
+    drawn = ("3_yardstick", "4_raters", "5_model", "6_projection", "7_trial_relations", "8_conditions", "11_practice", "12_groups",
+             "14_rating_shifts", "15_ceilings")
+    with lab_run.plt.rc_context(lab_run.STYLE):
+        figs = {name: lab_run.FIGURES[name](A) for name in drawn}
+        plain = {name: lab_run.FIGURES[name](whole) for name in drawn}
+    for name in drawn:  # each names the group without in its key, and only when somebody was taken out
+        assert any("without S2" in entry for entry in _key(figs[name])), name
+        assert not any("without" in entry for entry in _key(plain[name])), name
+    # ... and draws that group's own numbers, not the whole group's again
+    level_means, lower, upper = rest["per"]["lab"].mean(), *rest["ceiling"]["lab"].mean()
+    assert _lines(figs["3_yardstick"], x=[rest["rbar"]["lab"]] * 2) == 1 and _lines(plain["3_yardstick"], x=[rest["rbar"]["lab"]] * 2) == 0
+    assert _lines(figs["4_raters"], x=[rest["cons"]["lab"].mean()] * 2) == 1
+    for g in A["ceiling"]:  # each row's own noise ceiling, both bounds, whoever was taken out
+        assert all(_points(plain["4_raters"], x=bound) == 1 for bound in A["ceiling"][g].mean())
+    band = plain["5_model"].axes[0].patches[0].get_extents().transformed(plain["5_model"].axes[0].transData.inverted())
+    assert (band.y0, band.y1) == pytest.approx(tuple(A["ceiling"]["lab"].mean()))  # panel a's band: the lab's ceiling
+    assert _lines(figs["5_model"], y=level_means) == 2 and _lines(plain["5_model"], y=level_means) == 0  # panel a's mean, panel b's
+    assert _lines(figs["5_model"], y=[lower, upper]) == 1 and _lines(figs["5_model"], y=list(A["ceiling"]["lab"].mean())) == 1
+    assert _points(figs["6_projection"], lower) == 1 and _points(figs["6_projection"], upper) == 1 and _points(figs["6_projection"], rest["split"]["lab"]) == 1
+    assert _points(plain["6_projection"], A["ceiling"]["lab"].upper.mean()) == 1 and _points(plain["6_projection"], lower) == 0
+    rho = rest["trial_relations"].query("y == 'rating' and x == 'trial number'").rho.mean()
+    assert _lines(figs["7_trial_relations"], x=[rho] * 2) == 1
+    by_block = rest["conditional"].query("condition == 'block' and reference == 'consensus'").groupby("level").r.mean()
+    assert _lines(figs["8_conditions"], y=by_block) == 1
+    pairs = A["group_agreement"]["pairs"]
+    kept = pairs[(pairs.a != "S2") & (pairs.b != "S2")].groupby("kind").r.mean()
+    assert _lines(figs["11_practice"], y=[kept["both without"]] * 2) == 1 and _lines(figs["11_practice"], y=[kept["one of each"]] * 2) == 1
+    assert kept["both without"] == pytest.approx(rest["group_agreement"]["mean"]["both without"])
+    shown = [text.get_text() for text in figs["12_groups"].axes[0].texts]
+    row = rest["group_contrasts"].set_index("measure").loc["mean rating"]
+    assert f"{row['without']:.2f}" in shown and "without S2" in shown and len(shown) > len(plain["12_groups"].axes[0].texts)
+    shift = rest["rating_shifts"].set_index("contrast").loc["no colour change vs some", "difference"]
+    assert _lines(figs["14_rating_shifts"], x=[shift] * 2) == 1 and _lines(figs["14_rating_shifts"], y=rest["rating_by_changes"].mean()) == 1
+    assert _points(figs["15_ceilings"], lower) == 1 and _points(figs["15_ceilings"], upper) == 1 and _points(plain["15_ceilings"], lower) == 0
+    assert _lines(figs["15_ceilings"], y=rest["share"]["lab"][list(LEVELS)]) == 1 and _lines(figs["15_ceilings"], y=A["share"]["lab"][list(LEVELS)]) == 1
+    lab_run.plt.close("all")
+
+    with pytest.raises(ValueError, match="cannot take out S9"):
+        lab_run.compute(lab.find_runs(), without=["S9"])
 
 
 def test_lab_run_needs_two_participants(lab_env):
